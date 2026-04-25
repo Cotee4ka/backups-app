@@ -1,0 +1,36 @@
+node_modules/
+dist/
+build/
+out/
+.vite/
+.turbo/
+coverage/
+
+# Electron build output
+release/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Server runtime
+apps/server/data/
+apps/server/repos/
+apps/server/certs/
+
+# Logs
+*.log
+logs/
+
+# pnpm
+.pnpm-store/
