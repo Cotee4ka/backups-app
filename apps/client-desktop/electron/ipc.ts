@@ -231,6 +231,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
         includeHeavy: boolean;
         manualPaths?: string[];
         excludedPaths?: string[];
+        manualHeavyPaths?: string[];
         prune?: boolean;
       },
     ) => {
@@ -253,6 +254,41 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     async (_e, { serverId, projectId }: { serverId: string; projectId: string }) => {
       const { listHeavyCandidates } = await import('./external-sync');
       return listHeavyCandidates(serverId, projectId);
+    },
+  );
+
+  ipcMain.handle(
+    'externalSync:fileStatuses',
+    async (
+      _e,
+      {
+        serverId,
+        projectId,
+        files,
+      }: {
+        serverId: string;
+        projectId: string;
+        files: Array<{ relPath: string; size: number; mtime: number }>;
+      },
+    ) => {
+      const { fileSyncStatuses } = await import('./local-sync-ops');
+      return fileSyncStatuses(serverId, projectId, files);
+    },
+  );
+
+  ipcMain.handle(
+    'externalSync:downloadToLocal',
+    async (
+      _e,
+      {
+        serverId,
+        projectId,
+        path: p,
+        ref,
+      }: { serverId: string; projectId: string; path: string; ref?: string },
+    ) => {
+      const { downloadOneToLocal } = await import('./local-sync-ops');
+      return downloadOneToLocal(serverId, projectId, p, ref ?? 'HEAD');
     },
   );
 
@@ -288,7 +324,13 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     'externalSync:setRules',
     async (
       _e,
-      params: { serverId: string; projectId: string; manualPaths?: string[]; excludedPaths?: string[] },
+      params: {
+        serverId: string;
+        projectId: string;
+        manualPaths?: string[];
+        excludedPaths?: string[];
+        manualHeavyPaths?: string[];
+      },
     ) => {
       const store = getServerStore();
       const existing = store.getExternalSync(params.serverId, params.projectId);
@@ -297,6 +339,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
         ...existing,
         manualPaths: params.manualPaths ?? existing.manualPaths,
         excludedPaths: params.excludedPaths ?? existing.excludedPaths,
+        manualHeavyPaths: params.manualHeavyPaths ?? existing.manualHeavyPaths ?? [],
       });
       return store.getExternalSync(params.serverId, params.projectId);
     },

@@ -33,6 +33,19 @@ export function isHeavyPath(relPath: string): boolean {
   return HEAVY_PATTERNS.some((p) => p.test(relPath));
 }
 
+/**
+ * Совпадение пути с правилом: точное равенство или префикс с разделителем.
+ * Это позволяет юзеру пометить целую папку «исключить» (`tmp`) и все
+ * файлы внутри (`tmp/foo.log`) автоматически попадут под правило.
+ */
+export function matchesPathOrPrefix(path: string, rules: Set<string>): boolean {
+  if (rules.has(path)) return true;
+  for (const r of rules) {
+    if (r && path.startsWith(r + '/')) return true;
+  }
+  return false;
+}
+
 export interface SyncProgress {
   phase: 'listing' | 'comparing' | 'downloading' | 'cleaning' | 'done' | 'error';
   totalFiles?: number;
@@ -52,6 +65,8 @@ export interface SyncOptions {
   manualPaths?: string[];
   /** Файлы, которые юзер явно исключил */
   excludedPaths?: string[];
+  /** Файлы/папки, которые юзер вручную пометил «хранилище данных» (не heavy по эвристике, но не качать в обычном syncе). */
+  manualHeavyPaths?: string[];
   /** Удалять файлы локально, которых уже нет на сервере */
   prune?: boolean;
   onProgress?: (p: SyncProgress) => void;
@@ -96,6 +111,7 @@ export async function syncExternalProject(opts: SyncOptions): Promise<SyncResult
   const emit = opts.onProgress ?? (() => undefined);
   const manualSet = new Set(opts.manualPaths ?? []);
   const excludedSet = new Set(opts.excludedPaths ?? []);
+  const manualHeavySet = new Set(opts.manualHeavyPaths ?? []);
 
   emit({ phase: 'listing' });
 
@@ -105,9 +121,10 @@ export async function syncExternalProject(opts: SyncOptions): Promise<SyncResult
   const tree = await api.treeRecursive(opts.projectId, '');
 
   const candidates = tree.entries.filter((e) => {
-    if (excludedSet.has(e.relPath)) return false;
-    const heavy = isHeavyPath(e.relPath);
-    if (heavy && !manualSet.has(e.relPath)) {
+    if (matchesPathOrPrefix(e.relPath, excludedSet)) return false;
+    const heavy =
+      isHeavyPath(e.relPath) || matchesPathOrPrefix(e.relPath, manualHeavySet);
+    if (heavy && !matchesPathOrPrefix(e.relPath, manualSet)) {
       // тяжёлый файл — пропускаем, если не запросили включение
       return opts.includeHeavy;
     }
@@ -180,6 +197,7 @@ export async function syncExternalProject(opts: SyncOptions): Promise<SyncResult
     localPath: opts.localPath,
     excludedPaths: opts.excludedPaths ?? existing?.excludedPaths ?? [],
     manualPaths: opts.manualPaths ?? existing?.manualPaths ?? [],
+    manualHeavyPaths: opts.manualHeavyPaths ?? existing?.manualHeavyPaths ?? [],
     lastSyncAt: Date.now(),
     lastSyncIncludedHeavy: opts.includeHeavy,
   };

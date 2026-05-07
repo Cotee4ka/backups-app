@@ -34,10 +34,12 @@ interface StoredServer {
 export interface ExternalSync {
   projectId: string;
   localPath: string;
-  /** Glob/regex-исключения от пользователя сверху defaults */
+  /** Юзер пометил «никогда не качать» (точное совпадение или префикс). */
   excludedPaths: string[];
-  /** Файлы, которые подходят под "тяжёлые" триггеры, но юзер хочет синхронизировать */
+  /** Юзер пометил «считать обычным», даже если файл выглядит как хранилище. */
   manualPaths: string[];
+  /** Юзер вручную пометил «это хранилище данных, качать только по кнопке». */
+  manualHeavyPaths?: string[];
   lastSyncAt?: number;
   /** Was last sync done with includeHeavy=true */
   lastSyncIncludedHeavy?: boolean;
