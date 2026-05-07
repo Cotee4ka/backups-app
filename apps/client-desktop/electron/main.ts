@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, safeStorage } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, safeStorage, Menu } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import { registerIpc } from './ipc';
@@ -13,13 +13,16 @@ let mainWindow: BrowserWindow | null = null;
 const certWaiters = new Map<string, Promise<boolean>>();
 
 async function createWindow() {
+  Menu.setApplicationMenu(null);
+
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 820,
     minWidth: 980,
     minHeight: 640,
-    backgroundColor: '#0b0b10',
+    backgroundColor: '#0c0d13',
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
+    autoHideMenuBar: true,
     show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
