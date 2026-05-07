@@ -197,6 +197,74 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   ipcMain.handle('projects:browseHost', async (_e, { serverId, hostPath }) => {
     return new ApiClient(serverId).browseHost(hostPath);
   });
+
+  // ---------- External one-way sync ----------
+
+  ipcMain.handle('externalSync:get', async (_e, { serverId, projectId }: { serverId: string; projectId: string }) => {
+    return getServerStore().getExternalSync(serverId, projectId) ?? null;
+  });
+
+  ipcMain.handle('externalSync:chooseFolder', async () => {
+    const win = getWin();
+    if (!win) return null;
+    const r = await dialog.showOpenDialog(win, {
+      properties: ['openDirectory', 'createDirectory'],
+      title: 'Выбрать папку для синхронизации с проды',
+    });
+    if (r.canceled || r.filePaths.length === 0) return null;
+    return r.filePaths[0];
+  });
+
+  ipcMain.handle('externalSync:openFolder', async (_e, { localPath }: { localPath: string }) => {
+    if (localPath) await shell.openPath(localPath);
+    return { ok: true };
+  });
+
+  ipcMain.handle(
+    'externalSync:run',
+    async (
+      _e,
+      params: {
+        serverId: string;
+        projectId: string;
+        localPath: string;
+        includeHeavy: boolean;
+        manualPaths?: string[];
+        excludedPaths?: string[];
+        prune?: boolean;
+      },
+    ) => {
+      const { syncExternalProject } = await import('./external-sync');
+      return syncExternalProject({
+        ...params,
+        onProgress: (p) => {
+          getWin()?.webContents.send('externalSync:progress', {
+            serverId: params.serverId,
+            projectId: params.projectId,
+            ...p,
+          });
+        },
+      });
+    },
+  );
+
+  ipcMain.handle(
+    'externalSync:setRules',
+    async (
+      _e,
+      params: { serverId: string; projectId: string; manualPaths?: string[]; excludedPaths?: string[] },
+    ) => {
+      const store = getServerStore();
+      const existing = store.getExternalSync(params.serverId, params.projectId);
+      if (!existing) return null;
+      store.setExternalSync(params.serverId, {
+        ...existing,
+        manualPaths: params.manualPaths ?? existing.manualPaths,
+        excludedPaths: params.excludedPaths ?? existing.excludedPaths,
+      });
+      return store.getExternalSync(params.serverId, params.projectId);
+    },
+  );
   ipcMain.handle('projects:delete', async (_e, { serverId, projectId }) => {
     return new ApiClient(serverId).deleteProject(projectId);
   });

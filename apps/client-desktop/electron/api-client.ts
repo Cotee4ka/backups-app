@@ -258,6 +258,20 @@ export class ApiClient {
     );
   }
 
+  async treeRecursive(
+    projectId: string,
+    subPath = '',
+  ): Promise<{
+    path: string;
+    truncated: boolean;
+    entries: Array<{ relPath: string; size: number; mtime: number }>;
+  }> {
+    const qs = new URLSearchParams({ path: subPath });
+    return this.request(
+      `/api/projects/${encodeURIComponent(projectId)}/tree-recursive?${qs.toString()}`,
+    );
+  }
+
   /**
    * Скачивает бинарный blob файла на указанный путь.
    * Возвращает количество байт, записанных на диск.

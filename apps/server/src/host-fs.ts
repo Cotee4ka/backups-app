@@ -125,6 +125,60 @@ export async function statExternalFile(
   return { size: st.size, stream: createReadStream(target) };
 }
 
+export interface ExternalFileEntry {
+  relPath: string;
+  size: number;
+  mtime: number;
+}
+
+/**
+ * Рекурсивный обход external project. Возвращает плоский список файлов с
+ * относительными путями. Жёсткие лимиты — защита от symlink-петель и от
+ * случайно подключённой / на VPS.
+ */
+export async function listExternalTreeRecursive(
+  externalPath: string,
+  subPath: string,
+  opts: { maxEntries?: number; maxDepth?: number } = {},
+): Promise<{ entries: ExternalFileEntry[]; truncated: boolean }> {
+  const maxEntries = opts.maxEntries ?? 200_000;
+  const maxDepth = opts.maxDepth ?? 24;
+  const root = resolveSubPath(externalPath, subPath);
+  const entries: ExternalFileEntry[] = [];
+  let truncated = false;
+
+  async function walk(absPath: string, relBase: string, depth: number): Promise<void> {
+    if (truncated || depth > maxDepth) return;
+    let dir: import('node:fs').Dirent[];
+    try {
+      dir = await fs.readdir(absPath, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of dir) {
+      if (truncated) return;
+      if (entries.length >= maxEntries) {
+        truncated = true;
+        return;
+      }
+      const full = path.join(absPath, e.name);
+      const rel = relBase ? `${relBase}/${e.name}` : e.name;
+      if (e.isFile()) {
+        try {
+          const st = await fs.stat(full);
+          entries.push({ relPath: rel, size: st.size, mtime: st.mtimeMs });
+        } catch {
+          /* skip */
+        }
+      } else if (e.isDirectory()) {
+        await walk(full, rel, depth + 1);
+      }
+    }
+  }
+  await walk(root, '', 0);
+  return { entries, truncated };
+}
+
 export async function externalFileExists(
   externalPath: string,
   subPath: string,

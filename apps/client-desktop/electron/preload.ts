@@ -89,6 +89,47 @@ const api = {
         ref,
       }),
   },
+  // ---------- External one-way sync (read-only mirror → local) ----------
+  externalSync: {
+    get: (serverId: string, projectId: string) =>
+      ipcRenderer.invoke('externalSync:get', { serverId, projectId }),
+    chooseFolder: () => ipcRenderer.invoke('externalSync:chooseFolder'),
+    openFolder: (localPath: string) => ipcRenderer.invoke('externalSync:openFolder', { localPath }),
+    run: (params: {
+      serverId: string;
+      projectId: string;
+      localPath: string;
+      includeHeavy: boolean;
+      manualPaths?: string[];
+      excludedPaths?: string[];
+      prune?: boolean;
+    }) => ipcRenderer.invoke('externalSync:run', params),
+    setRules: (params: {
+      serverId: string;
+      projectId: string;
+      manualPaths?: string[];
+      excludedPaths?: string[];
+    }) => ipcRenderer.invoke('externalSync:setRules', params),
+    onProgress: (
+      cb: (p: {
+        serverId: string;
+        projectId: string;
+        phase: 'listing' | 'comparing' | 'downloading' | 'cleaning' | 'done' | 'error';
+        totalFiles?: number;
+        processedFiles?: number;
+        totalBytes?: number;
+        downloadedBytes?: number;
+        currentFile?: string;
+        error?: string;
+      }) => void,
+    ) => {
+      const sub = (_e: unknown, p: Parameters<typeof cb>[0]) => cb(p);
+      ipcRenderer.on('externalSync:progress', sub);
+      return () => {
+        ipcRenderer.removeListener('externalSync:progress', sub);
+      };
+    },
+  },
   // ---------- Sync ----------
   sync: {
     chooseFolder: (opts?: { mode?: 'download' | 'upload' | 'auto'; suggestedName?: string }) =>
