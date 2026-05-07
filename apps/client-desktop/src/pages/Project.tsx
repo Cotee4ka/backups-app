@@ -792,6 +792,11 @@ function FileBrowser({
   const [fileStatuses, setFileStatuses] = React.useState<Map<string, FileSyncStatus>>(
     new Map(),
   );
+  /** Множество всех «хранилище данных»-путей по серверной автодетекции —
+   *  применяется и к файлам, и к папкам (через префикс) для значков. */
+  const [serverHeavyPaths, setServerHeavyPaths] = React.useState<Set<string>>(new Set());
+  /** Множество junk-директорий (node_modules, .git, dist, …) от сервера. */
+  const [serverJunkDirs, setServerJunkDirs] = React.useState<Set<string>>(new Set());
   const [syncProgress, setSyncProgress] = React.useState<null | {
     phase: string;
     totalFiles?: number;
@@ -813,6 +818,7 @@ function FileBrowser({
   const [heavySearch, setHeavySearch] = React.useState('');
   const [heavySortKey, setHeavySortKey] = React.useState<'name' | 'size' | 'mtime'>('size');
   const [heavySortAsc, setHeavySortAsc] = React.useState(false);
+  const [heavyAddPath, setHeavyAddPath] = React.useState('');
   type SortKey = 'name' | 'size' | 'mtime' | 'author';
   const [sortKey, setSortKey] = React.useState<SortKey>('name');
   const [sortAsc, setSortAsc] = React.useState(true);
@@ -899,13 +905,26 @@ function FileBrowser({
   React.useEffect(() => {
     void loadTree('');
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serverId, projectId]);
+  }, [serverId, projectId, isExternal]);
 
   React.useEffect(() => {
     if (!isExternal) return;
     void window.backupsApp.externalSync
       .get(serverId, projectId)
       .then((s) => setExtSync(s as ExtSync | null));
+    // Подгружаем серверный отчёт «хранилище данных» один раз — нужен для
+    // значков на файлах и папках в общем дереве (не только в визарде).
+    void window.backupsApp.externalSync
+      .detectDataStore(serverId, projectId)
+      .then((report) => {
+        const r = report as DataStoreReport | null;
+        if (!r) return;
+        setServerHeavyPaths(new Set((r.files ?? []).map((f) => f.relPath)));
+        setServerJunkDirs(new Set((r.junkDirs ?? []).map((d) => d.relPath)));
+      })
+      .catch(() => {
+        /* старый сервер — fallback на клиентский regex остаётся */
+      });
   }, [isExternal, serverId, projectId]);
 
   React.useEffect(() => {
@@ -1214,6 +1233,27 @@ function FileBrowser({
     setExtSync(updated ?? next);
   }
 
+  /** Добавить произвольный путь в категорию «хранилище» вручную. */
+  function addHeavyByPath(rawPath: string) {
+    const p = rawPath.trim().replace(/^\/+/, '').replace(/\\+/g, '/');
+    if (!p) return;
+    if (heavyCandidates?.some((c) => c.relPath === p)) {
+      addToast({ type: 'info', text: 'Этот путь уже в списке' });
+      return;
+    }
+    const candidate: HeavyCandidate = {
+      relPath: p,
+      size: 0,
+      mtime: 0,
+      labels: ['добавлено вручную'],
+      reasons: ['name'],
+    };
+    setHeavyCandidates((prev) => (prev ? [candidate, ...prev] : [candidate]));
+    setHeavyChoices((prev) => ({ ...prev, [p]: 'heavy' }));
+    setHeavyAddPath('');
+    addToast({ type: 'success', text: `Добавлено в хранилище: ${p}` });
+  }
+
   /** Скачать/обновить один файл прямо в локальную папку синка (если она есть). */
   async function refreshFileLocally(entry: TreeEntry) {
     try {
@@ -1412,14 +1452,33 @@ function FileBrowser({
                   const inExcluded = matchesRule(entry.path, extSync?.excludedPaths);
                   const inManualHeavy = matchesRule(entry.path, extSync?.manualHeavyPaths);
                   const inManualOverride = matchesRule(entry.path, extSync?.manualPaths);
-                  const autoHeavy = entry.type === 'file' && isHeavyPath(entry.path);
+                  // Heavy по серверной автодетекции: для файла — точный путь,
+                  // для папки — есть ли внутри хоть один heavy-файл.
+                  let serverHeavy = false;
+                  if (entry.type === 'file') {
+                    serverHeavy = serverHeavyPaths.has(entry.path);
+                  } else {
+                    const prefix = entry.path + '/';
+                    for (const p of serverHeavyPaths) {
+                      if (p.startsWith(prefix)) {
+                        serverHeavy = true;
+                        break;
+                      }
+                    }
+                  }
+                  // Junk-папка — отдельный значок (не Database).
+                  const isJunkDir = entry.type === 'dir' && serverJunkDirs.has(entry.path);
+                  const autoHeavy =
+                    serverHeavy ||
+                    (entry.type === 'file' && isHeavyPath(entry.path)) ||
+                    (entry.type === 'dir' && isHeavyPath(entry.name));
                   const isHeavyMarked = (autoHeavy && !inManualOverride) || inManualHeavy;
                   return (
                   <li
                     key={entry.path}
                     className={
                       (isExternal
-                        ? 'grid grid-cols-[minmax(0,1fr)_100px_160px_140px]'
+                        ? 'grid grid-cols-[minmax(0,1fr)_100px_160px_100px]'
                         : 'grid grid-cols-[minmax(0,1fr)_150px_140px_120px]') +
                       ' items-center gap-3 px-4 py-3 text-sm transition hover:bg-accent/20 ' +
                       (selected?.path === entry.path ? 'bg-accent/25' : '') +
@@ -1442,22 +1501,40 @@ function FileBrowser({
                         {status === 'synced' && (
                           <span
                             title="Скачан и совпадает с продой"
-                            className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-emerald-400 ring-2 ring-card shadow-[0_0_8px_rgba(74,222,128,0.85)]"
+                            className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-emerald-400 ring-2 ring-card shadow-[0_0_8px_rgba(74,222,128,0.95)]"
                           />
                         )}
                         {status === 'modified' && (
                           <span
                             title="Локальная копия отличается от прод-версии"
-                            className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-amber-400 ring-2 ring-card shadow-[0_0_8px_rgba(251,191,36,0.7)]"
+                            className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-amber-400 ring-2 ring-card shadow-[0_0_8px_rgba(251,191,36,0.85)]"
+                          />
+                        )}
+                        {status === 'missing' && (
+                          <span
+                            title="Не скачано на ПК"
+                            className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-muted-foreground/40 ring-2 ring-card"
                           />
                         )}
                       </span>
                       <span className="min-w-0">
                         <span className="flex items-center gap-1.5 font-medium">
                           <span className="truncate">{entry.name}</span>
-                          {/* Метка «Хранилище данных» — для авто-heavy и manualHeavy. */}
-                          {isExternal && isHeavyMarked && !inExcluded && (
-                            <span title="Хранилище данных — качается только через кнопку «Хранилище данных…»">
+                          {/* Junk-папка (node_modules, .git, dist…) — серая метка */}
+                          {isExternal && isJunkDir && (
+                            <span title="Зависимости / автогенерируемое — автоматически исключается">
+                              <Ban className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
+                            </span>
+                          )}
+                          {/* Метка «Хранилище данных» — для файлов и папок (если внутри есть БД/бэкапы). */}
+                          {isExternal && isHeavyMarked && !inExcluded && !isJunkDir && (
+                            <span
+                              title={
+                                entry.type === 'dir'
+                                  ? 'В этой папке есть файлы хранилища данных — качаются по кнопке «Хранилище данных…»'
+                                  : 'Файл хранилища данных — качается через «Хранилище данных…»'
+                              }
+                            >
                               <Database className="h-3.5 w-3.5 shrink-0 text-amber-400/80" />
                             </span>
                           )}
@@ -1500,7 +1577,7 @@ function FileBrowser({
                       </>
                     )}
 
-                    <div className="flex justify-end gap-0.5">
+                    <div className="flex justify-end gap-1">
                       {entry.type === 'file' ? (
                         <>
                           {!isExternal && (
@@ -1508,111 +1585,32 @@ function FileBrowser({
                               <History className="h-4 w-4" />
                             </Button>
                           )}
-                          {isExternal && (
-                            <>
-                              {/* Toggle: пометить как хранилище / снять пометку. Авто-heavy
-                                  файл, помеченный manual, при клике вернётся в auto-heavy. */}
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                title={
-                                  isHeavyMarked
-                                    ? 'Считать обычным файлом (синхронизировать как сурс)'
-                                    : 'Пометить как хранилище данных'
-                                }
-                                className={isHeavyMarked ? 'text-amber-400' : ''}
-                                onClick={() => {
-                                  if (autoHeavy) {
-                                    // Авто-heavy: переключаем manual override.
-                                    void toggleManual(entry.path, !inManualOverride);
-                                  } else {
-                                    // Не-heavy: переключаем manualHeavyPaths.
-                                    void toggleHeavyMark(entry.path);
-                                  }
-                                }}
-                              >
-                                <Database className="h-4 w-4" />
-                              </Button>
-                              {/* Toggle: исключить из синхронизации совсем */}
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                title={
-                                  inExcluded
-                                    ? 'Вернуть в синхронизацию'
-                                    : 'Исключить из синхронизации'
-                                }
-                                className={inExcluded ? 'text-rose-400' : ''}
-                                onClick={() => void toggleExcluded(entry.path)}
-                              >
-                                <Ban className="h-4 w-4" />
-                              </Button>
-                              {/* Обновить файл в локальной папке (вместо Save As) */}
-                              {extSync?.localPath && (
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  title="Скачать/обновить файл в локальной папке синка"
-                                  onClick={() => void refreshFileLocally(entry)}
-                                >
-                                  <RefreshCw className="h-4 w-4" />
-                                </Button>
-                              )}
-                            </>
-                          )}
                           <Button variant="ghost" size="sm" title="Открыть файл" onClick={() => openFile(entry)}>
                             <ExternalLink className="h-4 w-4" />
                           </Button>
-                          {!isExternal && (
-                            <Button variant="ghost" size="sm" title="Скачать файл" onClick={() => downloadFile(entry)}>
-                              <Download className="h-4 w-4" />
-                            </Button>
-                          )}
-                          {/* Для external-файла кнопка «Скачать в…» доступна только когда
-                              синк-папка не выбрана — иначе используется Refresh выше. */}
-                          {isExternal && !extSync?.localPath && (
-                            <Button variant="ghost" size="sm" title="Скачать файл (выбрать куда)" onClick={() => downloadFile(entry)}>
-                              <Download className="h-4 w-4" />
-                            </Button>
-                          )}
-                        </>
-                      ) : (
-                        <>
-                          {/* Действия для папок (external project) — пометить целиком */}
-                          {isExternal && (
-                            <>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                title={
-                                  inManualHeavy
-                                    ? 'Убрать пометку «хранилище» с папки'
-                                    : 'Пометить всю папку как хранилище данных'
-                                }
-                                className={inManualHeavy ? 'text-amber-400' : ''}
-                                onClick={() => void toggleHeavyMark(entry.path)}
-                              >
-                                <Database className="h-4 w-4" />
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                title={
-                                  inExcluded
-                                    ? 'Вернуть папку в синхронизацию'
-                                    : 'Исключить всю папку из синхронизации'
-                                }
-                                className={inExcluded ? 'text-rose-400' : ''}
-                                onClick={() => void toggleExcluded(entry.path)}
-                              >
-                                <Ban className="h-4 w-4" />
-                              </Button>
-                            </>
-                          )}
-                          <Button variant="ghost" size="sm" onClick={() => loadTree(entry.path)}>
-                            <ChevronRight className="h-4 w-4" />
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            title={
+                              isExternal && extSync?.localPath
+                                ? 'Скачать в локальную папку синка (поверх существующего)'
+                                : 'Скачать файл'
+                            }
+                            onClick={() => {
+                              if (isExternal && extSync?.localPath) {
+                                void refreshFileLocally(entry);
+                              } else {
+                                void downloadFile(entry);
+                              }
+                            }}
+                          >
+                            <Download className="h-4 w-4" />
                           </Button>
                         </>
+                      ) : (
+                        <Button variant="ghost" size="sm" onClick={() => loadTree(entry.path)}>
+                          <ChevronRight className="h-4 w-4" />
+                        </Button>
                       )}
                     </div>
                   </li>
@@ -1805,6 +1803,7 @@ function FileBrowser({
     </div>
 
     <Dialog
+      size="lg"
       open={heavyDialogOpen}
       onClose={() => setHeavyDialogOpen(false)}
       title="Хранилище данных — подтверди и скачай"
@@ -1891,6 +1890,37 @@ function FileBrowser({
                 сурсы основной кнопкой.
               </div>
             ) : null}
+            <div className="rounded-lg border border-border bg-muted/10 p-3">
+              <div className="mb-2 flex items-center gap-2 text-xs font-medium">
+                <Plus className="h-3.5 w-3.5 accent-fg" />
+                Добавить путь вручную
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  type="text"
+                  placeholder="например: var/log или secret-data/users.csv"
+                  value={heavyAddPath}
+                  onChange={(e) => setHeavyAddPath(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') addHeavyByPath(heavyAddPath);
+                  }}
+                  className="min-w-[200px] flex-1 rounded-md border border-input bg-background/40 px-3 py-1.5 font-mono text-xs outline-none focus:ring-1 focus:ring-ring"
+                />
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => addHeavyByPath(heavyAddPath)}
+                  disabled={!heavyAddPath.trim()}
+                >
+                  <Plus className="h-3.5 w-3.5" /> Добавить
+                </Button>
+              </div>
+              <div className="mt-1 text-[11px] text-muted-foreground">
+                Можно указать файл (`var/log/app.log`) или папку (`var/log`) — относительно
+                корня проекта на проде. Папка пометит всё содержимое.
+              </div>
+            </div>
+
             {heavyCandidates && heavyCandidates.length > 0 && (
             <>
             <div className="flex flex-wrap items-center gap-2">
