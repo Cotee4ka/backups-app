@@ -9,9 +9,19 @@ interface DialogProps {
   description?: string;
   children: React.ReactNode;
   size?: 'sm' | 'md' | 'lg';
+  /** Положение модала по горизонтали. По умолчанию 'center'. */
+  align?: 'center' | 'left' | 'right';
 }
 
-export const Dialog = ({ open, onClose, title, description, children, size = 'md' }: DialogProps) => {
+export const Dialog = ({
+  open,
+  onClose,
+  title,
+  description,
+  children,
+  size = 'md',
+  align = 'center',
+}: DialogProps) => {
   React.useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -24,7 +34,12 @@ export const Dialog = ({ open, onClose, title, description, children, size = 'md
   if (!open) return null;
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+      className={cn(
+        'fixed inset-0 z-50 flex items-center bg-black/60 p-4 backdrop-blur-sm',
+        align === 'center' && 'justify-center',
+        align === 'left' && 'justify-start pl-8 transition-all duration-300',
+        align === 'right' && 'justify-end pr-8 transition-all duration-300',
+      )}
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}

@@ -65,6 +65,8 @@ interface MemberRow {
 
 type Tab = 'files' | 'history' | 'members' | 'settings';
 
+type FileSyncStatus = 'synced' | 'modified' | 'missing' | 'no-folder';
+
 export const ProjectPage = () => {
   const { serverId = '', projectId = '' } = useParams();
   const nav = useNavigate();
@@ -759,7 +761,6 @@ function FileBrowser({
     lastSyncAt?: number;
     lastSyncIncludedHeavy?: boolean;
   }
-  type FileSyncStatus = 'synced' | 'modified' | 'missing' | 'no-folder';
   interface HeavyCandidate {
     relPath: string;
     size: number;
@@ -1873,17 +1874,12 @@ function FileBrowser({
 
     <Dialog
       size="lg"
+      align={pickerOpen ? 'left' : 'center'}
       open={heavyDialogOpen}
       onClose={() => setHeavyDialogOpen(false)}
       title="Хранилище данных — подтверди и скачай"
       description="Сервер прошёлся по дереву файлов и нашёл то, что похоже на хранилище данных, плюс мусорные папки (node_modules, .git, dist…). Поправь, если что-то определилось не так."
     >
-      <div className="overflow-hidden">
-      <div
-        className="flex transition-transform duration-300 ease-out"
-        style={{ transform: pickerOpen ? 'translateX(-50%)' : 'translateX(0)' }}
-      >
-      <div className="w-full shrink-0 pr-2">
       <div className="space-y-4 text-sm">
         {heavyLoading ? (
           <div className="py-8 text-center text-muted-foreground">Сервер сканирует папку проекта…</div>
@@ -2167,159 +2163,22 @@ function FileBrowser({
           )}
         </div>
       </div>
-      </div>{/* end left wizard pane */}
-
-      <div className="w-full shrink-0 pl-2">
-        <div className="space-y-3 text-sm">
-          {/* Header с кнопкой назад */}
-          <div className="flex items-center gap-2">
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => setPickerOpen(false)}
-              title="Назад к визарду"
-            >
-              <ChevronLeft className="h-4 w-4" /> Назад
-            </Button>
-            <span className="text-base font-semibold">Файлы проекта</span>
-            <Badge variant="secondary">{allProjectFiles.length}</Badge>
-          </div>
-
-          {/* Search + sort */}
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="flex flex-1 min-w-[180px] items-center gap-2 rounded-md border border-border bg-background/40 px-2 py-1">
-              <Search className="h-3.5 w-3.5 text-muted-foreground" />
-              <input
-                type="text"
-                placeholder="Поиск по пути…"
-                value={pickerSearch}
-                onChange={(e) => setPickerSearch(e.target.value)}
-                className="min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground"
-              />
-              {pickerSearch && (
-                <button
-                  onClick={() => setPickerSearch('')}
-                  className="text-muted-foreground hover:text-foreground"
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              )}
-            </div>
-            <div className="flex items-center gap-1 text-xs text-muted-foreground">
-              <span>Сорт:</span>
-              {(['mtime', 'size', 'name'] as const).map((k) => {
-                const active = pickerSort === k;
-                const labels: Record<typeof k, string> = {
-                  size: 'размер',
-                  mtime: 'дата',
-                  name: 'имя',
-                };
-                return (
-                  <button
-                    key={k}
-                    onClick={() => {
-                      if (active) setPickerAsc((v) => !v);
-                      else {
-                        setPickerSort(k);
-                        setPickerAsc(k === 'name');
-                      }
-                    }}
-                    className={
-                      'inline-flex items-center gap-1 rounded px-1.5 py-0.5 transition ' +
-                      (active
-                        ? 'bg-card text-foreground'
-                        : 'hover:bg-card hover:text-foreground')
-                    }
-                  >
-                    {labels[k]}
-                    {active && (pickerAsc ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />)}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Список */}
-          <div className="max-h-[55vh] space-y-0.5 overflow-y-auto rounded-md border border-border bg-muted/10 p-2">
-            {(() => {
-              const q = pickerSearch.trim().toLowerCase();
-              const filtered = q
-                ? allProjectFiles.filter((f) => f.relPath.toLowerCase().includes(q))
-                : allProjectFiles;
-              const sorted = [...filtered].sort((a, b) => {
-                let v = 0;
-                if (pickerSort === 'name') v = a.relPath.localeCompare(b.relPath);
-                else if (pickerSort === 'size') v = a.size - b.size;
-                else if (pickerSort === 'mtime') v = a.mtime - b.mtime;
-                return pickerAsc ? v : -v;
-              });
-              if (sorted.length === 0) {
-                return (
-                  <div className="py-4 text-center text-xs text-muted-foreground">
-                    {allProjectFiles.length === 0
-                      ? 'Список пуст. Серверная часть не отвечает или проект пустой.'
-                      : `Ничего не найдено по «${pickerSearch}»`}
-                  </div>
-                );
-              }
-              return sorted.slice(0, 500).map((f) => {
-                const alreadyAdded = heavyCandidates?.some((c) => c.relPath === f.relPath);
-                const localStatus = globalStatuses.get(f.relPath);
-                return (
-                  <div
-                    key={f.relPath}
-                    className="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-card/60"
-                  >
-                    <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate font-mono text-xs" title={f.relPath}>
-                        {f.relPath}
-                      </div>
-                      <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
-                        <span>{formatBytes(f.size)}</span>
-                        <span>·</span>
-                        <span>{formatRelativeTime(f.mtime)}</span>
-                        {localStatus === 'synced' && (
-                          <span className="text-emerald-400/80">●</span>
-                        )}
-                        {localStatus === 'modified' && (
-                          <span className="text-amber-400/80">●</span>
-                        )}
-                      </div>
-                    </div>
-                    <Button
-                      size="sm"
-                      variant={alreadyAdded ? 'ghost' : 'outline'}
-                      disabled={alreadyAdded}
-                      onClick={() => addHeavyByPath(f.relPath)}
-                      title={alreadyAdded ? 'Уже в списке' : 'Добавить в хранилище'}
-                    >
-                      {alreadyAdded ? (
-                        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
-                      ) : (
-                        <Plus className="h-3.5 w-3.5" />
-                      )}
-                    </Button>
-                  </div>
-                );
-              });
-            })()}
-          </div>
-
-          <div className="flex justify-between text-[11px] text-muted-foreground">
-            <span>Тыкни «+» рядом с файлом, чтобы пометить его как хранилище данных.</span>
-            <button
-              onClick={() => setPickerOpen(false)}
-              className="accent-fg underline-offset-2 hover:underline"
-            >
-              готово
-            </button>
-          </div>
-        </div>
-      </div>{/* end right picker pane */}
-      </div>{/* end flex slide */}
-      </div>{/* end overflow-hidden */}
     </Dialog>
+
+    {/* Отдельное выдвижное окно справа — picker с папками/файлами как
+        на главной странице проекта. Открывается одновременно с визардом,
+        не накрывает его. */}
+    <DataStorePicker
+      open={heavyDialogOpen && pickerOpen}
+      onClose={() => setPickerOpen(false)}
+      serverId={serverId}
+      projectId={projectId}
+      pickedPaths={new Set((heavyCandidates ?? []).map((c) => c.relPath))}
+      onPick={(p) => addHeavyByPath(p)}
+      globalStatuses={globalStatuses}
+      serverHeavyPaths={serverHeavyPaths}
+      serverJunkDirs={serverJunkDirs}
+    />
     </>
   );
 }
@@ -2382,5 +2241,286 @@ function SortBtn({
         <ChevronUp className="h-3 w-3 opacity-25" />
       )}
     </button>
+  );
+}
+
+interface PickerEntry {
+  name: string;
+  path: string;
+  type: 'file' | 'dir';
+  size: number | null;
+  mtime?: number;
+}
+
+/**
+ * Выдвижное окно справа со своим деревом проекта (с папками, breadcrumbs,
+ * сортировкой). Открывается параллельно с визардом «Хранилище данных»,
+ * имеет свой собственный backdrop справа, не перекрывает визард.
+ */
+function DataStorePicker({
+  open,
+  onClose,
+  serverId,
+  projectId,
+  pickedPaths,
+  onPick,
+  globalStatuses,
+  serverHeavyPaths,
+  serverJunkDirs,
+}: {
+  open: boolean;
+  onClose: () => void;
+  serverId: string;
+  projectId: string;
+  pickedPaths: Set<string>;
+  onPick: (relPath: string) => void;
+  globalStatuses: Map<string, FileSyncStatus>;
+  serverHeavyPaths: Set<string>;
+  serverJunkDirs: Set<string>;
+}) {
+  const [pathInRepo, setPathInRepo] = React.useState('');
+  const [entries, setEntries] = React.useState<PickerEntry[]>([]);
+  const [loading, setLoading] = React.useState(false);
+  const [search, setSearch] = React.useState('');
+  const [sortKey, setSortKey] = React.useState<'name' | 'size' | 'mtime'>('mtime');
+  const [sortAsc, setSortAsc] = React.useState(false);
+
+  const load = React.useCallback(
+    async (next: string) => {
+      setLoading(true);
+      try {
+        const r = (await window.backupsApp.projects.tree(
+          serverId,
+          projectId,
+          next,
+          'HEAD',
+        )) as { entries: PickerEntry[] };
+        setEntries(r.entries);
+        setPathInRepo(next);
+      } catch {
+        setEntries([]);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [serverId, projectId],
+  );
+
+  React.useEffect(() => {
+    if (open) void load('');
+  }, [open, load]);
+
+  if (!open) return null;
+
+  const filtered = (() => {
+    const q = search.trim().toLowerCase();
+    let list = q ? entries.filter((e) => e.name.toLowerCase().includes(q)) : entries;
+    list = [...list].sort((a, b) => {
+      if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
+      let v = 0;
+      if (sortKey === 'name') v = a.name.localeCompare(b.name);
+      else if (sortKey === 'size') v = (a.size ?? 0) - (b.size ?? 0);
+      else if (sortKey === 'mtime') v = (a.mtime ?? 0) - (b.mtime ?? 0);
+      return sortAsc ? v : -v;
+    });
+    return list;
+  })();
+
+  const crumbs = pathInRepo ? pathInRepo.split('/') : [];
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="false"
+      onMouseDown={(e) => e.stopPropagation()}
+      className="fixed top-0 right-0 z-[60] m-4 flex h-[calc(100vh-2rem)] w-[480px] max-w-[40vw] flex-col overflow-hidden rounded-xl border border-border bg-card shadow-2xl animate-in slide-in-from-right duration-300"
+    >
+      {/* Header */}
+      <div className="flex items-center justify-between border-b border-border px-4 py-3">
+        <div>
+          <div className="text-sm font-semibold">Файлы проекта</div>
+          <div className="text-[11px] text-muted-foreground">
+            Выбери файл или папку — пометится как «хранилище данных»
+          </div>
+        </div>
+        <button
+          onClick={onClose}
+          className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+          title="Закрыть"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+
+      {/* Breadcrumbs */}
+      <div className="flex flex-wrap items-center gap-1 border-b border-border bg-muted/20 px-3 py-2 text-xs">
+        <button
+          className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-muted-foreground hover:bg-card hover:text-foreground"
+          onClick={() => void load('')}
+        >
+          <Home className="h-3 w-3" />
+          root
+        </button>
+        {crumbs.map((part, idx) => {
+          const p = crumbs.slice(0, idx + 1).join('/');
+          return (
+            <React.Fragment key={p}>
+              <ChevronRight className="h-3 w-3 text-muted-foreground" />
+              <button
+                className="rounded px-1.5 py-0.5 text-muted-foreground hover:bg-card hover:text-foreground"
+                onClick={() => void load(p)}
+              >
+                {part}
+              </button>
+            </React.Fragment>
+          );
+        })}
+      </div>
+
+      {/* Search + sort */}
+      <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2">
+        <div className="flex flex-1 min-w-[140px] items-center gap-2 rounded-md border border-border bg-background/40 px-2 py-1">
+          <Search className="h-3 w-3 text-muted-foreground" />
+          <input
+            type="text"
+            placeholder="Поиск в этой папке…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground"
+          />
+          {search && (
+            <button onClick={() => setSearch('')} className="text-muted-foreground hover:text-foreground">
+              <X className="h-3 w-3" />
+            </button>
+          )}
+        </div>
+        <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
+          {(['mtime', 'size', 'name'] as const).map((k) => {
+            const active = sortKey === k;
+            const labels: Record<typeof k, string> = {
+              size: 'размер',
+              mtime: 'дата',
+              name: 'имя',
+            };
+            return (
+              <button
+                key={k}
+                onClick={() => {
+                  if (active) setSortAsc((v) => !v);
+                  else {
+                    setSortKey(k);
+                    setSortAsc(k === 'name');
+                  }
+                }}
+                className={
+                  'inline-flex items-center gap-0.5 rounded px-1 py-0.5 transition ' +
+                  (active ? 'bg-card text-foreground' : 'hover:bg-card hover:text-foreground')
+                }
+              >
+                {labels[k]}
+                {active && (sortAsc ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />)}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* List */}
+      <div className="flex-1 overflow-y-auto p-2">
+        {loading ? (
+          <div className="py-8 text-center text-xs text-muted-foreground">Загрузка…</div>
+        ) : filtered.length === 0 ? (
+          <div className="py-8 text-center text-xs text-muted-foreground">
+            {search ? `Ничего не найдено по «${search}»` : 'Пусто в этой папке'}
+          </div>
+        ) : (
+          <ul className="divide-y divide-border">
+            {filtered.map((entry) => {
+              const status =
+                entry.type === 'file' ? globalStatuses.get(entry.path) : undefined;
+              const isJunk = entry.type === 'dir' && serverJunkDirs.has(entry.path);
+              const isHeavy =
+                (entry.type === 'file' && serverHeavyPaths.has(entry.path)) ||
+                (entry.type === 'file' && isHeavyPath(entry.path)) ||
+                (entry.type === 'dir' && isHeavyPath(entry.name));
+              const alreadyPicked = pickedPaths.has(entry.path);
+              return (
+                <li
+                  key={entry.path}
+                  className="flex items-center gap-2 px-2 py-1.5 transition hover:bg-accent/20"
+                >
+                  <button
+                    className="flex min-w-0 items-center gap-2 text-left"
+                    onClick={() => entry.type === 'dir' && void load(entry.path)}
+                  >
+                    <span className="relative grid h-7 w-7 shrink-0 place-items-center rounded-md bg-muted/40">
+                      {entry.type === 'dir' ? (
+                        <Folder className="accent-fg h-4 w-4" />
+                      ) : (
+                        <FileText className="accent-fg h-4 w-4 opacity-60" />
+                      )}
+                      {status === 'synced' && (
+                        <span className="absolute bottom-0.5 right-0.5 h-1.5 w-0.5 rounded-full bg-emerald-400/70 shadow-[0_0_2px_rgba(74,222,128,0.9)]" />
+                      )}
+                      {status === 'modified' && (
+                        <span className="absolute bottom-0.5 right-0.5 h-1.5 w-0.5 rounded-full bg-amber-400/70 shadow-[0_0_2px_rgba(251,191,36,0.85)]" />
+                      )}
+                    </span>
+                    <span className="min-w-0">
+                      <span className="flex items-center gap-1.5 text-xs font-medium">
+                        <span className="truncate">{entry.name}</span>
+                        {isJunk && <Ban className="h-3 w-3 shrink-0 text-muted-foreground/70" />}
+                        {isHeavy && !isJunk && (
+                          <Database className="h-3 w-3 shrink-0 text-amber-400/80" />
+                        )}
+                      </span>
+                      <span className="block text-[10px] text-muted-foreground">
+                        {entry.type === 'dir'
+                          ? 'папка'
+                          : `${formatBytes(entry.size ?? 0)} · ${entry.mtime ? formatRelativeTime(entry.mtime) : '—'}`}
+                      </span>
+                    </span>
+                  </button>
+                  <div className="ml-auto flex shrink-0 items-center gap-1">
+                    {entry.type === 'dir' && (
+                      <button
+                        onClick={() => void load(entry.path)}
+                        className="rounded p-1 text-muted-foreground hover:bg-card hover:text-foreground"
+                        title="Открыть папку"
+                      >
+                        <ChevronRight className="h-4 w-4" />
+                      </button>
+                    )}
+                    <Button
+                      size="sm"
+                      variant={alreadyPicked ? 'ghost' : 'outline'}
+                      disabled={alreadyPicked}
+                      onClick={() => onPick(entry.path)}
+                      title={
+                        alreadyPicked
+                          ? 'Уже добавлен'
+                          : entry.type === 'dir'
+                            ? 'Пометить всю папку как хранилище'
+                            : 'Пометить как хранилище данных'
+                      }
+                    >
+                      {alreadyPicked ? (
+                        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
+                      ) : (
+                        <Plus className="h-3.5 w-3.5" />
+                      )}
+                    </Button>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+
+      <div className="border-t border-border bg-muted/10 px-3 py-2 text-[11px] text-muted-foreground">
+        Кликни по папке, чтобы зайти внутрь. Тыкни «+», чтобы добавить файл или целую папку.
+      </div>
+    </div>
   );
 }
