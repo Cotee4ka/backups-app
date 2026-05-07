@@ -25,6 +25,7 @@ import {
   resolveHostPath,
   statExternalFile,
 } from '../host-fs.js';
+import { detectDataStore } from '../data-store-detector.js';
 
 const createSchema = z.object({
   name: z.string().min(1).max(128),
@@ -433,6 +434,40 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
     try {
       const result = await listExternalTreeRecursive(project.external_path, query.path);
       return reply.send({ path: query.path, entries: result.entries, truncated: result.truncated });
+    } catch (e) {
+      if (e instanceof InvalidHostPathError) {
+        return reply.code(400).send({ error: e.message });
+      }
+      throw e;
+    }
+  });
+
+  // Серверная автодетекция «хранилища данных» (БД, бэкапы, архивы, логи).
+  // Применяет эвристики из data-store-detector: расширения, триггер-слова в
+  // путях, размер файла. Клиент использует этот endpoint в визарде первой
+  // синхронизации, чтобы юзер сразу видел причины и мог поправить руками.
+  app.get('/projects/:id/data-store', async (req, reply) => {
+    const me = await requireAuth(req);
+    const params = z.object({ id: z.string() }).parse(req.params);
+    const query = z.object({ path: z.string().default('') }).parse(req.query);
+
+    const project = getProject(params.id);
+    if (!project) return reply.code(404).send({ error: 'Not found' });
+
+    const isMember = getDb()
+      .prepare(`SELECT 1 FROM project_members WHERE project_id = ? AND user_id = ?`)
+      .get(params.id, me.id);
+    if (!isMember && me.role !== 'owner' && me.role !== 'admin') {
+      return reply.code(403).send({ error: 'Forbidden' });
+    }
+
+    if (!project.external_path) {
+      return reply.code(400).send({ error: 'Data-store detector only for external projects' });
+    }
+
+    try {
+      const report = await detectDataStore(project.external_path, query.path);
+      return reply.send(report);
     } catch (e) {
       if (e instanceof InvalidHostPathError) {
         return reply.code(400).send({ error: e.message });

@@ -753,6 +753,23 @@ function FileBrowser({
     lastSyncAt?: number;
     lastSyncIncludedHeavy?: boolean;
   }
+  interface HeavyCandidate {
+    relPath: string;
+    size: number;
+    mtime: number;
+    /** Метки от серверного детектора («SQL-дамп», «backup в пути», «крупнее 25 МБ»). */
+    labels?: string[];
+    /** Машинные причины: 'extension' | 'name' | 'size'. */
+    reasons?: string[];
+  }
+  interface DataStoreReport {
+    files: HeavyCandidate[];
+    totalScanned: number;
+    truncated: boolean;
+    totalDataBytes: number;
+    /** true, если сработал фоллбэк на клиентский regex (сервер < 0.2.0). */
+    fallback?: boolean;
+  }
   const [extSync, setExtSync] = React.useState<ExtSync | null>(null);
   const [syncProgress, setSyncProgress] = React.useState<null | {
     phase: string;
@@ -763,6 +780,16 @@ function FileBrowser({
     totalBytes?: number;
     includeHeavy: boolean;
   }>(null);
+  // Heavy-confirm wizard
+  const [heavyDialogOpen, setHeavyDialogOpen] = React.useState(false);
+  const [heavyDialogMode, setHeavyDialogMode] =
+    React.useState<'confirm-and-sync' | 'first-time'>('confirm-and-sync');
+  const [heavyCandidates, setHeavyCandidates] = React.useState<HeavyCandidate[] | null>(null);
+  const [heavyReport, setHeavyReport] = React.useState<DataStoreReport | null>(null);
+  const [heavyLoading, setHeavyLoading] = React.useState(false);
+  // false = "обычный" (синхр. как все), true = "тяжёлый" (только по запросу), 'excluded' = не качать
+  type HeavyChoice = 'heavy' | 'normal' | 'excluded';
+  const [heavyChoices, setHeavyChoices] = React.useState<Record<string, HeavyChoice>>({});
   type SortKey = 'name' | 'size' | 'mtime' | 'author';
   const [sortKey, setSortKey] = React.useState<SortKey>('name');
   const [sortAsc, setSortAsc] = React.useState(true);
@@ -825,9 +852,17 @@ function FileBrowser({
 
   React.useEffect(() => {
     if (!isExternal) return;
-    void window.backupsApp.externalSync
-      .get(serverId, projectId)
-      .then((s) => setExtSync(s as ExtSync | null));
+    void window.backupsApp.externalSync.get(serverId, projectId).then((s) => {
+      const ext = s as ExtSync | null;
+      setExtSync(ext);
+      // При первом подключении к external project — открыть визард уточнения
+      // тяжёлых файлов один раз. Признак "первого раза" = ничего ещё не
+      // синхронизировано (lastSyncAt отсутствует).
+      if (!ext || !ext.lastSyncAt) {
+        void openHeavyDialog('first-time');
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isExternal, serverId, projectId]);
 
   React.useEffect(() => {
@@ -905,6 +940,158 @@ function FileBrowser({
     if (extSync?.localPath) void window.backupsApp.externalSync.openFolder(extSync.localPath);
   }
 
+  async function openHeavyDialog(mode: 'confirm-and-sync' | 'first-time') {
+    setHeavyDialogMode(mode);
+    setHeavyDialogOpen(true);
+    setHeavyLoading(true);
+    try {
+      // 1) Пробуем серверную автодетекцию (есть в server >= 0.2.0). Сервер
+      //    знает размеры файлов, триггер-слова в путях и отдаёт labels.
+      const serverReport = (await window.backupsApp.externalSync.detectDataStore(
+        serverId,
+        projectId,
+      )) as DataStoreReport | null;
+
+      let list: HeavyCandidate[];
+      let report: DataStoreReport;
+      if (serverReport && serverReport.files) {
+        list = serverReport.files;
+        report = serverReport;
+      } else {
+        // 2) Фоллбэк: на старом сервере детекция делается клиентом
+        //    (regex по relPath, без размеров/labels).
+        const legacy = (await window.backupsApp.externalSync.listHeavy(
+          serverId,
+          projectId,
+        )) as Array<{ relPath: string; size: number; mtime: number }>;
+        list = legacy.map((f) => ({ ...f, labels: ['по имени файла'], reasons: ['extension'] }));
+        report = {
+          files: list,
+          totalScanned: list.length,
+          truncated: false,
+          totalDataBytes: list.reduce((a, c) => a + c.size, 0),
+          fallback: true,
+        };
+      }
+      const cur =
+        extSync ??
+        ((await window.backupsApp.externalSync.get(serverId, projectId)) as ExtSync | null);
+      const manualSet = new Set(cur?.manualPaths ?? []);
+      const excludedSet = new Set(cur?.excludedPaths ?? []);
+      const initial: Record<string, HeavyChoice> = {};
+      for (const f of list) {
+        if (excludedSet.has(f.relPath)) initial[f.relPath] = 'excluded';
+        else if (manualSet.has(f.relPath)) initial[f.relPath] = 'normal';
+        else initial[f.relPath] = 'heavy';
+      }
+      setHeavyCandidates(list);
+      setHeavyReport(report);
+      setHeavyChoices(initial);
+    } catch (e) {
+      addToast({ type: 'error', text: (e as Error).message });
+      setHeavyDialogOpen(false);
+    } finally {
+      setHeavyLoading(false);
+    }
+  }
+
+  async function applyHeavyAndSync(runSyncAfter: boolean) {
+    if (!heavyCandidates) return;
+    // Собрать manualPaths / excludedPaths из выбранных значений.
+    const cur = extSync ?? {
+      projectId,
+      localPath: '',
+      excludedPaths: [] as string[],
+      manualPaths: [] as string[],
+    };
+    // Берём существующие manual/excluded, которые НЕ относятся к heavy
+    // (могут быть пути не из heavy — оставим их как есть).
+    const heavySet = new Set(heavyCandidates.map((c) => c.relPath));
+    const keptManual = (cur.manualPaths ?? []).filter((p) => !heavySet.has(p));
+    const keptExcluded = (cur.excludedPaths ?? []).filter((p) => !heavySet.has(p));
+    const nextManual = [...keptManual];
+    const nextExcluded = [...keptExcluded];
+    for (const f of heavyCandidates) {
+      const c = heavyChoices[f.relPath] ?? 'heavy';
+      if (c === 'normal') nextManual.push(f.relPath);
+      else if (c === 'excluded') nextExcluded.push(f.relPath);
+    }
+    // Если папка ещё не выбрана — попросим выбрать её перед синком.
+    let localPath = cur.localPath;
+    if (runSyncAfter && !localPath) {
+      const chosen = await chooseLocalFolder();
+      if (!chosen) return;
+      localPath = chosen;
+    }
+    // Сохраняем правила (если папка уже была — на бэкенд, иначе только локально).
+    if (cur.localPath || localPath) {
+      const updated = (await window.backupsApp.externalSync.setRules({
+        serverId,
+        projectId,
+        manualPaths: nextManual,
+        excludedPaths: nextExcluded,
+      })) as ExtSync | null;
+      setExtSync(
+        updated ?? {
+          projectId,
+          localPath,
+          excludedPaths: nextExcluded,
+          manualPaths: nextManual,
+        },
+      );
+    } else {
+      setExtSync({
+        projectId,
+        localPath: '',
+        excludedPaths: nextExcluded,
+        manualPaths: nextManual,
+      });
+    }
+    setHeavyDialogOpen(false);
+    if (runSyncAfter) {
+      // Запускаем sync с includeHeavy=true — скачаются и тяжёлые файлы,
+      // которые остались в категории "тяжёлый". Те, что юзер пометил
+      // как "обычный" (manual), и так попадают в основной набор.
+      // Те, что "excluded" — не попадут вообще.
+      await runSyncWith({
+        includeHeavy: true,
+        manualPaths: nextManual,
+        excludedPaths: nextExcluded,
+        localPath,
+      });
+    }
+  }
+
+  async function runSyncWith(p: {
+    includeHeavy: boolean;
+    manualPaths: string[];
+    excludedPaths: string[];
+    localPath: string;
+  }) {
+    setSyncProgress({ phase: 'listing', includeHeavy: p.includeHeavy });
+    try {
+      const result = (await window.backupsApp.externalSync.run({
+        serverId,
+        projectId,
+        localPath: p.localPath,
+        includeHeavy: p.includeHeavy,
+        manualPaths: p.manualPaths,
+        excludedPaths: p.excludedPaths,
+        prune: false,
+      })) as { downloaded: number; skipped: number; bytes: number };
+      const fresh = (await window.backupsApp.externalSync.get(serverId, projectId)) as ExtSync | null;
+      setExtSync(fresh);
+      const sizeMb = (result.bytes / 1024 / 1024).toFixed(1);
+      addToast({
+        type: 'success',
+        text: `Синхронизировано: ${result.downloaded} файлов (${sizeMb} МБ), пропущено ${result.skipped}`,
+      });
+    } catch (e) {
+      addToast({ type: 'error', text: (e as Error).message });
+      setSyncProgress(null);
+    }
+  }
+
   async function toggleManual(relPath: string, makeManual: boolean) {
     const cur = extSync ?? {
       projectId,
@@ -975,6 +1162,7 @@ function FileBrowser({
   const crumbs = pathInRepo ? pathInRepo.split('/') : [];
 
   return (
+    <>
     <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
       <Card className="overflow-hidden">
         <CardHeader className="flex-row items-center justify-between gap-3">
@@ -987,30 +1175,7 @@ function FileBrowser({
             </CardDescription>
           </div>
           <div className="flex items-center gap-2">
-            {isExternal && (
-              <>
-                <Button
-                  variant="gradient"
-                  onClick={() => void runSync(false)}
-                  disabled={!!syncProgress}
-                  title="Скачать актуальные сурсы (без БД и архивов)"
-                >
-                  <CloudDownload className="h-4 w-4" />
-                  {syncProgress ? 'Идёт синхр…' : 'Синхронизировать'}
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => void runSync(true)}
-                  disabled={!!syncProgress}
-                  title="Скачать ВСЁ, включая БД, дампы, архивы, логи"
-                >
-                  <Database className="h-4 w-4" />
-                  Тяжёлые
-                </Button>
-              </>
-            )}
-            <Button variant="outline" onClick={() => loadTree()}>
+            <Button variant="outline" size="sm" onClick={() => loadTree()}>
               <RefreshCcw className="h-4 w-4" /> Обновить
             </Button>
           </div>
@@ -1048,7 +1213,7 @@ function FileBrowser({
           )}
 
           {isExternal && (
-            <div className="rounded-lg border border-border bg-muted/20 p-3 space-y-2">
+            <div className="rounded-xl border border-border bg-muted/20 p-4 space-y-3">
               <div className="flex flex-wrap items-center gap-2 text-xs">
                 <FolderDown className="accent-fg h-4 w-4" />
                 <span className="text-muted-foreground">Локальная папка:</span>
@@ -1086,15 +1251,48 @@ function FileBrowser({
                   Последняя синхронизация:{' '}
                   <span className="text-foreground">{formatRelativeTime(extSync.lastSyncAt)}</span>
                   {extSync.lastSyncIncludedHeavy && (
-                    <Badge variant="info">с тяжёлыми</Badge>
+                    <Badge variant="info">с хранилищем</Badge>
                   )}
                 </div>
               ) : (
                 <div className="text-xs text-muted-foreground">
-                  Ещё не синхронизировано. Тяжёлые файлы (БД, дампы, архивы, логи) скачиваются
-                  отдельной кнопкой «Тяжёлые».
+                  Структура папок копируется как на проде. Файлы хранилища данных (БД, бэкапы,
+                  архивы, логи) будут помечены значком — их можно подтвердить или исключить
+                  через «Хранилище данных…».
                 </div>
               )}
+
+              {/* Главная кнопка синхронизации — поверх "Хранилище данных" */}
+              <div className="pt-1">
+                <Button
+                  variant="gradient"
+                  className="w-full sm:w-auto"
+                  onClick={() => void runSync(false)}
+                  disabled={!!syncProgress}
+                  title="Скачать актуальные сурсы (без БД, архивов и логов)"
+                >
+                  <CloudDownload className="h-4 w-4" />
+                  {syncProgress ? 'Идёт синхронизация…' : 'Синхронизировать сурсы'}
+                </Button>
+              </div>
+
+              {/* Хранилище данных — мелкой второстепенной кнопкой */}
+              <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void openHeavyDialog('confirm-and-sync')}
+                  disabled={!!syncProgress || heavyLoading}
+                  title="Уточнить и скачать БД, дампы, архивы и статистику"
+                >
+                  <Database className="h-4 w-4" />
+                  Хранилище данных…
+                </Button>
+                <span>
+                  Файлы БД, бэкапов и архивов лежат в той же структуре, что и на проде, но
+                  качаются отдельно — чтобы случайно не вытянуть гигабайты.
+                </span>
+              </div>
             </div>
           )}
 
@@ -1207,7 +1405,7 @@ function FileBrowser({
                             extSync?.manualPaths?.includes(entry.path) ? (
                               <Badge variant="success" className="shrink-0">manual</Badge>
                             ) : (
-                              <span title="Тяжёлый файл (БД/дамп/архив). Качается только по кнопке «Тяжёлые».">
+                              <span title="Файл хранилища данных (БД, бэкап, архив, лог). Лежит там же, где и на проде, но качается только через «Хранилище данных…».">
                                 <Database className="h-3.5 w-3.5 shrink-0 text-amber-400/80" />
                               </span>
                             )
@@ -1343,6 +1541,166 @@ function FileBrowser({
         </CardContent>
       </Card>
     </div>
+
+    <Dialog
+      open={heavyDialogOpen}
+      onClose={() => setHeavyDialogOpen(false)}
+      title={
+        heavyDialogMode === 'first-time'
+          ? 'Первое подключение: настройка хранилища данных'
+          : 'Хранилище данных — подтверди и скачай'
+      }
+      description={
+        heavyDialogMode === 'first-time'
+          ? 'Прежде чем качать сурсы, определим, что считать хранилищем данных — это БД, бэкапы, архивы и логи. Их обычно не нужно тащить на ПК вместе с исходниками.'
+          : 'Сервер сам прошёлся по дереву файлов и нашёл то, что похоже на хранилище данных. Поправь, если что-то определилось не так.'
+      }
+    >
+      <div className="space-y-4 text-sm">
+        {heavyLoading ? (
+          <div className="py-8 text-center text-muted-foreground">Сервер сканирует папку проекта…</div>
+        ) : !heavyCandidates || heavyCandidates.length === 0 ? (
+          <div className="rounded-lg border border-dashed border-border p-6 text-center text-muted-foreground">
+            Не нашлось файлов, похожих на хранилище данных (БД, бэкапы, архивы, логи). Можно
+            смело синхронизировать.
+          </div>
+        ) : (
+          <>
+            <div className="rounded-md bg-muted/20 p-3 text-xs text-muted-foreground">
+              {heavyReport?.fallback ? (
+                <>
+                  Серверная часть устарела — детекция сделана клиентом по расширениям и триггер-словам.
+                  Обновите сервер на VPS, чтобы получить детекцию по размеру и причинам.
+                </>
+              ) : (
+                <>
+                  Сервер просканировал {heavyReport?.totalScanned ?? '—'} файлов и определил{' '}
+                  <span className="text-foreground">{heavyCandidates.length}</span> как хранилище
+                  данных. Совокупный объём:{' '}
+                  <span className="text-foreground">
+                    {formatBytes(heavyReport?.totalDataBytes ?? 0)}
+                  </span>
+                  .
+                </>
+              )}
+            </div>
+            <div className="max-h-[50vh] space-y-1 overflow-y-auto rounded-md border border-border bg-muted/10 p-2">
+              {heavyCandidates.map((f) => {
+                const choice = heavyChoices[f.relPath] ?? 'heavy';
+                return (
+                  <div
+                    key={f.relPath}
+                    className="flex flex-wrap items-center gap-2 rounded-md px-2 py-1.5 hover:bg-card/60"
+                  >
+                    <Database className="h-3.5 w-3.5 shrink-0 text-amber-400/80" />
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate font-mono text-xs" title={f.relPath}>
+                        {f.relPath}
+                      </div>
+                      {f.labels && f.labels.length > 0 && (
+                        <div className="mt-0.5 flex flex-wrap gap-1">
+                          {f.labels.map((l) => (
+                            <span
+                              key={l}
+                              className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-200/90"
+                            >
+                              {l}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                      {formatBytes(f.size)}
+                    </span>
+                    <div className="flex shrink-0 gap-1">
+                      <HeavyChoiceBtn
+                        active={choice === 'heavy'}
+                        onClick={() =>
+                          setHeavyChoices((c) => ({ ...c, [f.relPath]: 'heavy' }))
+                        }
+                        title="Хранилище — качается только по этой кнопке"
+                      >
+                        хранилище
+                      </HeavyChoiceBtn>
+                      <HeavyChoiceBtn
+                        active={choice === 'normal'}
+                        onClick={() =>
+                          setHeavyChoices((c) => ({ ...c, [f.relPath]: 'normal' }))
+                        }
+                        title="Считать обычным — качать в основном sync'е"
+                      >
+                        обычный
+                      </HeavyChoiceBtn>
+                      <HeavyChoiceBtn
+                        active={choice === 'excluded'}
+                        onClick={() =>
+                          setHeavyChoices((c) => ({ ...c, [f.relPath]: 'excluded' }))
+                        }
+                        title="Никогда не качать"
+                      >
+                        исключить
+                      </HeavyChoiceBtn>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
+
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Button variant="ghost" onClick={() => setHeavyDialogOpen(false)}>
+            {heavyDialogMode === 'first-time' ? 'Позже' : 'Отмена'}
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => void applyHeavyAndSync(false)}
+            disabled={heavyLoading}
+          >
+            Сохранить правила
+          </Button>
+          {heavyDialogMode !== 'first-time' && heavyCandidates && heavyCandidates.length > 0 && (
+            <Button
+              variant="gradient"
+              onClick={() => void applyHeavyAndSync(true)}
+              disabled={heavyLoading}
+            >
+              <CloudDownload className="h-4 w-4" /> Скачать хранилище сейчас
+            </Button>
+          )}
+        </div>
+      </div>
+    </Dialog>
+    </>
+  );
+}
+
+function HeavyChoiceBtn({
+  active,
+  onClick,
+  title,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      className={
+        'rounded-md border px-2 py-0.5 text-[11px] transition ' +
+        (active
+          ? 'accent-btn border-transparent text-white'
+          : 'border-border bg-background/40 text-muted-foreground hover:text-foreground')
+      }
+    >
+      {children}
+    </button>
   );
 }
 

@@ -272,6 +272,46 @@ export class ApiClient {
     );
   }
 
+  async detectDataStore(
+    projectId: string,
+    subPath = '',
+  ): Promise<{
+    files: Array<{
+      relPath: string;
+      size: number;
+      mtime: number;
+      reasons: Array<'extension' | 'name' | 'size'>;
+      labels: string[];
+    }>;
+    totalScanned: number;
+    truncated: boolean;
+    totalDataBytes: number;
+  }> {
+    const qs = new URLSearchParams({ path: subPath });
+    return this.request(
+      `/api/projects/${encodeURIComponent(projectId)}/data-store?${qs.toString()}`,
+    );
+  }
+
+  async getServerVersion(): Promise<{
+    version: string;
+    features?: string[];
+  }> {
+    // /api/version появился в 0.2.0. На старых серверах — fallback на /api/health.
+    try {
+      return await this.request('/api/version', { auth: false });
+    } catch (e) {
+      if (e instanceof ServerApiError && e.status === 404) {
+        const health = await this.request<{ version?: string; features?: string[] }>(
+          '/api/health',
+          { auth: false },
+        );
+        return { version: health.version ?? '0.0.0', features: health.features };
+      }
+      throw e;
+    }
+  }
+
   /**
    * Скачивает бинарный blob файла на указанный путь.
    * Возвращает количество байт, записанных на диск.

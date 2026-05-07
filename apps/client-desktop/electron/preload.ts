@@ -28,6 +28,7 @@ const api = {
     }) => ipcRenderer.invoke('servers:connect', params),
     delete: (id: string) => ipcRenderer.invoke('servers:delete', id),
     rename: (id: string, name: string) => ipcRenderer.invoke('servers:rename', { serverId: id, name }),
+    checkVersion: (id: string) => ipcRenderer.invoke('servers:checkVersion', { serverId: id }),
     onInstallLog: (cb: (msg: { line: string; type: 'stdout' | 'stderr' | 'info' }) => void) => {
       const sub = (_e: unknown, msg: { line: string; type: 'stdout' | 'stderr' | 'info' }) =>
         cb(msg);
@@ -95,6 +96,10 @@ const api = {
       ipcRenderer.invoke('externalSync:get', { serverId, projectId }),
     chooseFolder: () => ipcRenderer.invoke('externalSync:chooseFolder'),
     openFolder: (localPath: string) => ipcRenderer.invoke('externalSync:openFolder', { localPath }),
+    listHeavy: (serverId: string, projectId: string) =>
+      ipcRenderer.invoke('externalSync:listHeavy', { serverId, projectId }),
+    detectDataStore: (serverId: string, projectId: string) =>
+      ipcRenderer.invoke('externalSync:detectDataStore', { serverId, projectId }),
     run: (params: {
       serverId: string;
       projectId: string;
