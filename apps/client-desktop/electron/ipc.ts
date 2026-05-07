@@ -258,6 +258,18 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   );
 
   ipcMain.handle(
+    'externalSync:listAllFiles',
+    async (
+      _e,
+      { serverId, projectId }: { serverId: string; projectId: string },
+    ) => {
+      // Серверный treeRecursive прунит junk-папки по умолчанию (>=0.3.0).
+      const tree = await new ApiClient(serverId).treeRecursive(projectId, '');
+      return tree.entries;
+    },
+  );
+
+  ipcMain.handle(
     'externalSync:fileStatuses',
     async (
       _e,

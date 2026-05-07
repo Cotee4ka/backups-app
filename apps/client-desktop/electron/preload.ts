@@ -105,6 +105,8 @@ const api = {
       projectId: string,
       files: Array<{ relPath: string; size: number; mtime: number }>,
     ) => ipcRenderer.invoke('externalSync:fileStatuses', { serverId, projectId, files }),
+    listAllFiles: (serverId: string, projectId: string) =>
+      ipcRenderer.invoke('externalSync:listAllFiles', { serverId, projectId }),
     downloadToLocal: (serverId: string, projectId: string, pathInRepo: string, ref = 'HEAD') =>
       ipcRenderer.invoke('externalSync:downloadToLocal', {
         serverId,
