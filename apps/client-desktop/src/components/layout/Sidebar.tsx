@@ -20,7 +20,7 @@ export const Sidebar = () => {
   return (
     <aside className="flex w-72 shrink-0 flex-col border-r border-border bg-card/40 backdrop-blur-md">
       <div className="flex items-center gap-3 border-b border-border px-5 py-4">
-        <div className="grid h-9 w-9 place-items-center rounded-lg bg-gradient-to-br from-blue-500 via-violet-500 to-fuchsia-500 text-white shadow-lg shadow-violet-500/30">
+        <div className="accent-icon grid h-9 w-9 place-items-center rounded-lg text-white" style={{ boxShadow: 'var(--accent-shadow)' }}>
           <Cloud className="h-5 w-5" />
         </div>
         <div className="flex flex-col">
@@ -66,7 +66,7 @@ export const Sidebar = () => {
         <div className="mt-3 flex flex-col gap-1.5 px-2">
           <Link
             to="/wizard/create"
-            className="inline-flex h-8 w-full items-center justify-center gap-2 rounded-md bg-gradient-to-br from-blue-500 via-violet-500 to-fuchsia-500 px-3 text-xs font-medium text-white shadow-lg shadow-violet-500/25 transition hover:opacity-95"
+            className="accent-btn inline-flex h-8 w-full items-center justify-center gap-2 rounded-md px-3 text-xs font-medium"
           >
             <Plus className="h-4 w-4" /> Создать сервер
           </Link>

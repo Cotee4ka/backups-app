@@ -47,6 +47,7 @@ interface LocalAccount {
 
 interface AppSettings {
   theme: 'dark' | 'light' | 'system';
+  accentTheme: 'indigo' | 'ocean' | 'forest' | 'sunset' | 'gold' | 'mono';
   language: 'ru' | 'en';
   autoLaunch: boolean;
   startMinimized: boolean;
@@ -64,6 +65,7 @@ interface StoreData {
 
 const DEFAULT_SETTINGS: AppSettings = {
   theme: 'dark',
+  accentTheme: 'indigo',
   language: 'ru',
   autoLaunch: false,
   startMinimized: false,
