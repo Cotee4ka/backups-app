@@ -5,7 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { useAppStore } from '@/store/app-store';
-import { Globe, ShieldCheck, ChevronRight, Sparkles, Pencil } from 'lucide-react';
+import { Globe, ShieldCheck, ChevronRight, Sparkles, Pencil, Terminal, Copy } from 'lucide-react';
 
 interface PairPayload {
   v: number;
@@ -117,11 +117,28 @@ export const ConnectServerWizard = () => {
           <CardHeader>
             <CardTitle>Pair-токен</CardTitle>
             <CardDescription>
-              Запусти <code>install.sh</code> на своей проде по SSH — он напечатает строку
-              вида <code>bap1.eyJ…</code>. Вставь её сюда.
+              Запусти одну команду на сервере — она напечатает токен. Вставь его сюда.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            <div className="rounded-lg border border-border bg-muted/20 p-3 space-y-2">
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <Terminal className="h-3.5 w-3.5 shrink-0" />
+                <span>Запусти на своей проде по SSH:</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <code className="flex-1 rounded bg-background/60 px-3 py-2 font-mono text-[11px] text-foreground/80 break-all">
+                  curl -fsSL https://raw.githubusercontent.com/Cotee4ka/backups-app/main/apps/server/scripts/install.sh | sudo bash
+                </code>
+                <button
+                  className="shrink-0 rounded p-2 hover:bg-accent transition-colors"
+                  title="Скопировать"
+                  onClick={() => navigator.clipboard.writeText('curl -fsSL https://raw.githubusercontent.com/Cotee4ka/backups-app/main/apps/server/scripts/install.sh | sudo bash')}
+                >
+                  <Copy className="h-3.5 w-3.5 text-muted-foreground" />
+                </button>
+              </div>
+            </div>
             <div className="space-y-1.5">
               <Label htmlFor="tok">Pair-токен</Label>
               <textarea

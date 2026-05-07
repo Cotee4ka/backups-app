@@ -22,6 +22,8 @@ import {
   Activity,
   AlertCircle,
   ChevronRight,
+  ChevronUp,
+  ChevronDown,
   Download,
   Upload,
   Loader2,
@@ -31,6 +33,7 @@ import {
   ExternalLink,
   Home,
 } from 'lucide-react';
+import { Spinner, DotsLoader } from '@/components/ui/spinner';
 
 interface CommitInfo {
   sha: string;
@@ -735,6 +738,32 @@ function FileBrowser({
   const [fileHistory, setFileHistory] = React.useState<FileHistoryEntry[]>([]);
   const [historyLoading, setHistoryLoading] = React.useState(false);
   const [serverNeedsUpdate, setServerNeedsUpdate] = React.useState(false);
+  type SortKey = 'name' | 'size' | 'mtime' | 'author';
+  const [sortKey, setSortKey] = React.useState<SortKey>('name');
+  const [sortAsc, setSortAsc] = React.useState(true);
+
+  function toggleSort(key: SortKey) {
+    if (sortKey === key) setSortAsc((v) => !v);
+    else { setSortKey(key); setSortAsc(key === 'name'); }
+  }
+
+  const sorted = React.useMemo(() => {
+    const dirs = entries.filter((e) => e.type === 'dir');
+    const files = entries.filter((e) => e.type === 'file');
+    const cmp = (a: TreeEntry, b: TreeEntry): number => {
+      let v = 0;
+      if (sortKey === 'name') v = a.name.localeCompare(b.name);
+      else if (sortKey === 'size') v = (a.size ?? 0) - (b.size ?? 0);
+      else if (sortKey === 'mtime') v = (a.mtime ?? 0) - (b.mtime ?? 0);
+      else if (sortKey === 'author') {
+        const ta = a.lastCommit?.authorName ?? '';
+        const tb = b.lastCommit?.authorName ?? '';
+        v = ta.localeCompare(tb);
+      }
+      return sortAsc ? v : -v;
+    };
+    return [...dirs.sort(cmp), ...files.sort(cmp)];
+  }, [entries, sortKey, sortAsc]);
 
   const loadTree = React.useCallback(
     async (nextPath = pathInRepo) => {
@@ -875,7 +904,10 @@ function FileBrowser({
               </p>
             </div>
           ) : loading ? (
-            <div className="py-12 text-center text-sm text-muted-foreground">Загрузка файлов…</div>
+            <div className="flex flex-col items-center gap-3 py-14">
+              <Spinner size="lg" className="text-violet-400/70" />
+              <DotsLoader />
+            </div>
           ) : entries.length === 0 ? (
             <div className="rounded-lg border border-dashed border-border py-12 text-center text-sm text-muted-foreground">
               Файлов пока нет. Нажмите «Загрузить на сервер» или сделайте первый push.
@@ -884,21 +916,21 @@ function FileBrowser({
             <div className="overflow-hidden rounded-xl border border-border">
               {isExternal ? (
                 <div className="grid grid-cols-[minmax(0,1fr)_100px_160px_100px] gap-3 border-b border-border bg-muted/20 px-4 py-2 text-xs uppercase tracking-wider text-muted-foreground">
-                  <span>Имя</span>
-                  <span>Размер</span>
-                  <span>Изменён</span>
+                  <SortBtn label="Имя" k="name" cur={sortKey} asc={sortAsc} toggle={toggleSort} />
+                  <SortBtn label="Размер" k="size" cur={sortKey} asc={sortAsc} toggle={toggleSort} />
+                  <SortBtn label="Изменён" k="mtime" cur={sortKey} asc={sortAsc} toggle={toggleSort} />
                   <span className="text-right">Действия</span>
                 </div>
               ) : (
                 <div className="grid grid-cols-[minmax(0,1fr)_150px_140px_120px] gap-3 border-b border-border bg-muted/20 px-4 py-2 text-xs uppercase tracking-wider text-muted-foreground">
-                  <span>Имя</span>
-                  <span>Изменил</span>
-                  <span>Когда</span>
+                  <SortBtn label="Имя" k="name" cur={sortKey} asc={sortAsc} toggle={toggleSort} />
+                  <SortBtn label="Изменил" k="author" cur={sortKey} asc={sortAsc} toggle={toggleSort} />
+                  <SortBtn label="Когда" k="mtime" cur={sortKey} asc={sortAsc} toggle={toggleSort} />
                   <span className="text-right">Действия</span>
                 </div>
               )}
               <ul className="divide-y divide-border">
-                {entries.map((entry) => (
+                {sorted.map((entry) => (
                   <li
                     key={entry.path}
                     className={
@@ -1044,4 +1076,30 @@ function changeTypeLabel(type: string): string {
   if (type === 'deleted') return 'удалён';
   if (type === 'renamed') return 'переименован';
   return 'изменён';
+}
+
+function SortBtn({
+  label, k, cur, asc, toggle,
+}: {
+  label: string;
+  k: 'name' | 'size' | 'mtime' | 'author';
+  cur: string;
+  asc: boolean;
+  toggle: (k: 'name' | 'size' | 'mtime' | 'author') => void;
+}) {
+  const active = cur === k;
+  return (
+    <button
+      onClick={() => toggle(k)}
+      className="flex items-center gap-1 uppercase tracking-wider hover:text-foreground transition-colors"
+      style={{ color: active ? 'hsl(var(--foreground))' : undefined }}
+    >
+      {label}
+      {active ? (
+        asc ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />
+      ) : (
+        <ChevronUp className="h-3 w-3 opacity-25" />
+      )}
+    </button>
+  );
 }

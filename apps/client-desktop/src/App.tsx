@@ -11,6 +11,7 @@ import { ServerPage } from './pages/Server';
 import { SettingsPage } from './pages/Settings';
 import { Sidebar } from './components/layout/Sidebar';
 import { ToastHost } from './components/ui/toast';
+import { FullPageLoader } from './components/ui/spinner';
 
 export default function App(): JSX.Element {
   const isAuthed = useAppStore((s) => s.isAuthed);
@@ -75,6 +76,10 @@ export default function App(): JSX.Element {
       offJoin();
     };
   }, [addToast, setPresence]);
+
+  if (hasAccount === null) {
+    return <FullPageLoader />;
+  }
 
   if (!hasAccount) {
     return (
