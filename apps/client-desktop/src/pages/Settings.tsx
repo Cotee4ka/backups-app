@@ -6,14 +6,26 @@ import { Label } from '@/components/ui/label';
 import { useAppStore } from '@/store/app-store';
 import { Sun, Moon, Monitor, Power, Clock, Globe, Trash2 } from 'lucide-react';
 
+type AccentTheme = 'indigo' | 'ocean' | 'forest' | 'sunset' | 'gold' | 'mono';
+
 interface AppSettings {
   theme: 'dark' | 'light' | 'system';
+  accentTheme: AccentTheme;
   language: 'ru' | 'en';
   autoLaunch: boolean;
   startMinimized: boolean;
   syncDebounceMs: number;
   syncPeriodicMs: number;
 }
+
+const ACCENT_THEMES: { id: AccentTheme; label: string; gradient: string }[] = [
+  { id: 'indigo',  label: 'Индиго',    gradient: 'linear-gradient(135deg,#4f46e5,#7c3aed)' },
+  { id: 'ocean',   label: 'Океан',     gradient: 'linear-gradient(135deg,#2563eb,#0891b2)' },
+  { id: 'forest',  label: 'Лес',       gradient: 'linear-gradient(135deg,#0d9488,#16a34a)' },
+  { id: 'sunset',  label: 'Закат',     gradient: 'linear-gradient(135deg,#dc2626,#be185d)' },
+  { id: 'gold',    label: 'Золото',    gradient: 'linear-gradient(135deg,#b45309,#c2410c)' },
+  { id: 'mono',    label: 'Монохром',  gradient: 'linear-gradient(135deg,#334155,#64748b)' },
+];
 
 export const SettingsPage = () => {
   const addToast = useAppStore((s) => s.addToast);
@@ -39,6 +51,9 @@ export const SettingsPage = () => {
   async function patch(p: Partial<AppSettings>) {
     const s = (await window.backupsApp.settings.update(p)) as AppSettings;
     setSettings(s);
+    if (p.accentTheme) {
+      document.documentElement.dataset.accent = p.accentTheme;
+    }
   }
 
   async function toggleAutoLaunch(v: boolean) {
@@ -104,6 +119,36 @@ export const SettingsPage = () => {
                 active={settings.language === 'en'}
                 onClick={() => patch({ language: 'en' })}
               />
+            </div>
+          </div>
+
+          <div>
+            <Label className="mb-3 block">Акцентная тема</Label>
+            <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
+              {ACCENT_THEMES.map((t) => {
+                const active = (settings.accentTheme ?? 'indigo') === t.id;
+                return (
+                  <button
+                    key={t.id}
+                    onClick={() => patch({ accentTheme: t.id })}
+                    className={
+                      'flex flex-col items-center gap-1.5 rounded-lg border p-2 text-xs transition ' +
+                      (active
+                        ? 'border-white/30 bg-white/5 text-foreground'
+                        : 'border-border text-muted-foreground hover:bg-accent/40')
+                    }
+                  >
+                    <span
+                      className="h-7 w-7 rounded-full shadow-md"
+                      style={{ background: t.gradient }}
+                    />
+                    {t.label}
+                    {active && (
+                      <span className="h-1.5 w-1.5 rounded-full bg-white/70" />
+                    )}
+                  </button>
+                );
+              })}
             </div>
           </div>
         </CardContent>

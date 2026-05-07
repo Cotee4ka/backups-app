@@ -23,6 +23,10 @@ export default function App(): JSX.Element {
 
   React.useEffect(() => {
     void window.backupsApp.account.has().then((v) => setHasAccount(!!v));
+    void window.backupsApp.settings.get().then((s) => {
+      const st = s as { accentTheme?: string; theme?: string };
+      document.documentElement.dataset.accent = st.accentTheme ?? 'indigo';
+    });
   }, [setHasAccount]);
 
   React.useEffect(() => {
