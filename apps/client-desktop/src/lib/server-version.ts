@@ -5,7 +5,7 @@
  * Если на VPS установлен сервер старее — клиент покажет плашку
  * "обновите серверное ПО" с готовой командой.
  */
-export const MIN_SERVER_VERSION = '0.2.0';
+export const MIN_SERVER_VERSION = '0.3.0';
 
 /** Простой semver-парсер: '1.2.3' → [1, 2, 3]. Игнорирует pre-release. */
 function parseSemver(v: string): [number, number, number] {

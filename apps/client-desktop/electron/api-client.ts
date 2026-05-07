@@ -261,12 +261,16 @@ export class ApiClient {
   async treeRecursive(
     projectId: string,
     subPath = '',
+    opts: { includeJunk?: boolean } = {},
   ): Promise<{
     path: string;
     truncated: boolean;
     entries: Array<{ relPath: string; size: number; mtime: number }>;
+    /** Имена «junk»-директорий (node_modules, .git, dist), пропущенных сервером. */
+    prunedDirs?: Array<{ relPath: string; size: number; fileCount: number }>;
   }> {
     const qs = new URLSearchParams({ path: subPath });
+    if (opts.includeJunk) qs.set('includeJunk', '1');
     return this.request(
       `/api/projects/${encodeURIComponent(projectId)}/tree-recursive?${qs.toString()}`,
     );
@@ -283,9 +287,17 @@ export class ApiClient {
       reasons: Array<'extension' | 'name' | 'size'>;
       labels: string[];
     }>;
+    junkDirs: Array<{
+      relPath: string;
+      size: number;
+      fileCount: number;
+      name: string;
+      category: 'dependencies' | 'build' | 'cache' | 'vcs' | 'ide' | 'temp';
+    }>;
     totalScanned: number;
     truncated: boolean;
     totalDataBytes: number;
+    totalJunkBytes: number;
   }> {
     const qs = new URLSearchParams({ path: subPath });
     return this.request(

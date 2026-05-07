@@ -5,7 +5,7 @@
  *
  * Бампать руками вместе с релизом docker-образа (CI собирает образ из main).
  */
-export const SERVER_VERSION = '0.2.0';
+export const SERVER_VERSION = '0.3.0';
 
 /**
  * Список фич, которые добавлялись в этой версии и в более ранних. Клиент
@@ -17,4 +17,5 @@ export const SERVER_FEATURES = [
   'tree-recursive',
   'data-store-detector',
   'version',
+  'junk-dirs', // 0.3.0: tree-recursive прунит node_modules / .git / dist по умолчанию
 ] as const;

@@ -762,11 +762,20 @@ function FileBrowser({
     /** Машинные причины: 'extension' | 'name' | 'size'. */
     reasons?: string[];
   }
+  interface JunkDir {
+    relPath: string;
+    size: number;
+    fileCount: number;
+    name: string;
+    category: 'dependencies' | 'build' | 'cache' | 'vcs' | 'ide' | 'temp';
+  }
   interface DataStoreReport {
     files: HeavyCandidate[];
+    junkDirs: JunkDir[];
     totalScanned: number;
     truncated: boolean;
     totalDataBytes: number;
+    totalJunkBytes: number;
     /** true, если сработал фоллбэк на клиентский regex (сервер < 0.2.0). */
     fallback?: boolean;
   }
@@ -782,12 +791,10 @@ function FileBrowser({
   }>(null);
   // Heavy-confirm wizard
   const [heavyDialogOpen, setHeavyDialogOpen] = React.useState(false);
-  const [heavyDialogMode, setHeavyDialogMode] =
-    React.useState<'confirm-and-sync' | 'first-time'>('confirm-and-sync');
   const [heavyCandidates, setHeavyCandidates] = React.useState<HeavyCandidate[] | null>(null);
   const [heavyReport, setHeavyReport] = React.useState<DataStoreReport | null>(null);
   const [heavyLoading, setHeavyLoading] = React.useState(false);
-  // false = "обычный" (синхр. как все), true = "тяжёлый" (только по запросу), 'excluded' = не качать
+  // 'heavy' = качается только по запросу, 'normal' = синхр. как все, 'excluded' = никогда
   type HeavyChoice = 'heavy' | 'normal' | 'excluded';
   const [heavyChoices, setHeavyChoices] = React.useState<Record<string, HeavyChoice>>({});
   type SortKey = 'name' | 'size' | 'mtime' | 'author';
@@ -852,17 +859,9 @@ function FileBrowser({
 
   React.useEffect(() => {
     if (!isExternal) return;
-    void window.backupsApp.externalSync.get(serverId, projectId).then((s) => {
-      const ext = s as ExtSync | null;
-      setExtSync(ext);
-      // При первом подключении к external project — открыть визард уточнения
-      // тяжёлых файлов один раз. Признак "первого раза" = ничего ещё не
-      // синхронизировано (lastSyncAt отсутствует).
-      if (!ext || !ext.lastSyncAt) {
-        void openHeavyDialog('first-time');
-      }
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    void window.backupsApp.externalSync
+      .get(serverId, projectId)
+      .then((s) => setExtSync(s as ExtSync | null));
   }, [isExternal, serverId, projectId]);
 
   React.useEffect(() => {
@@ -940,26 +939,27 @@ function FileBrowser({
     if (extSync?.localPath) void window.backupsApp.externalSync.openFolder(extSync.localPath);
   }
 
-  async function openHeavyDialog(mode: 'confirm-and-sync' | 'first-time') {
-    setHeavyDialogMode(mode);
+  async function openHeavyDialog() {
     setHeavyDialogOpen(true);
     setHeavyLoading(true);
     try {
       // 1) Пробуем серверную автодетекцию (есть в server >= 0.2.0). Сервер
-      //    знает размеры файлов, триггер-слова в путях и отдаёт labels.
+      //    знает размеры файлов, триггер-слова в путях, junk-папки и labels.
       const serverReport = (await window.backupsApp.externalSync.detectDataStore(
         serverId,
         projectId,
       )) as DataStoreReport | null;
 
       let list: HeavyCandidate[];
+      let junkDirs: JunkDir[] = [];
       let report: DataStoreReport;
       if (serverReport && serverReport.files) {
         list = serverReport.files;
+        junkDirs = serverReport.junkDirs ?? [];
         report = serverReport;
       } else {
         // 2) Фоллбэк: на старом сервере детекция делается клиентом
-        //    (regex по relPath, без размеров/labels).
+        //    (regex по relPath, без размеров/labels/junk).
         const legacy = (await window.backupsApp.externalSync.listHeavy(
           serverId,
           projectId,
@@ -967,9 +967,11 @@ function FileBrowser({
         list = legacy.map((f) => ({ ...f, labels: ['по имени файла'], reasons: ['extension'] }));
         report = {
           files: list,
+          junkDirs: [],
           totalScanned: list.length,
           truncated: false,
           totalDataBytes: list.reduce((a, c) => a + c.size, 0),
+          totalJunkBytes: 0,
           fallback: true,
         };
       }
@@ -978,12 +980,19 @@ function FileBrowser({
         ((await window.backupsApp.externalSync.get(serverId, projectId)) as ExtSync | null);
       const manualSet = new Set(cur?.manualPaths ?? []);
       const excludedSet = new Set(cur?.excludedPaths ?? []);
+
+      // Heavy-файлы: по умолчанию «heavy», если уже стояло manual/excluded — вернём.
       const initial: Record<string, HeavyChoice> = {};
       for (const f of list) {
         if (excludedSet.has(f.relPath)) initial[f.relPath] = 'excluded';
         else if (manualSet.has(f.relPath)) initial[f.relPath] = 'normal';
         else initial[f.relPath] = 'heavy';
       }
+
+      // junkDirs показываются информационно — они уже исключены сервером
+      // на уровне /tree-recursive, дополнительная конфигурация не нужна.
+      void junkDirs;
+
       setHeavyCandidates(list);
       setHeavyReport(report);
       setHeavyChoices(initial);
@@ -1212,127 +1221,7 @@ function FileBrowser({
             </div>
           )}
 
-          {isExternal && (
-            <div className="rounded-xl border border-border bg-muted/20 p-4 space-y-3">
-              <div className="flex flex-wrap items-center gap-2 text-xs">
-                <FolderDown className="accent-fg h-4 w-4" />
-                <span className="text-muted-foreground">Локальная папка:</span>
-                {extSync?.localPath ? (
-                  <>
-                    <code className="rounded bg-background/60 px-2 py-1 font-mono text-[11px] text-foreground/90 break-all">
-                      {extSync.localPath}
-                    </code>
-                    <button
-                      className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
-                      title="Открыть в проводнике"
-                      onClick={openLocalFolder}
-                    >
-                      <FolderOpen className="h-3.5 w-3.5" />
-                    </button>
-                    <button
-                      className="text-xs text-muted-foreground underline-offset-2 hover:underline"
-                      onClick={() => void changeLocalFolder()}
-                    >
-                      сменить
-                    </button>
-                  </>
-                ) : (
-                  <button
-                    className="text-xs accent-fg underline-offset-2 hover:underline"
-                    onClick={() => void changeLocalFolder()}
-                  >
-                    выбрать папку
-                  </button>
-                )}
-              </div>
-              {extSync?.lastSyncAt ? (
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
-                  Последняя синхронизация:{' '}
-                  <span className="text-foreground">{formatRelativeTime(extSync.lastSyncAt)}</span>
-                  {extSync.lastSyncIncludedHeavy && (
-                    <Badge variant="info">с хранилищем</Badge>
-                  )}
-                </div>
-              ) : (
-                <div className="text-xs text-muted-foreground">
-                  Структура папок копируется как на проде. Файлы хранилища данных (БД, бэкапы,
-                  архивы, логи) будут помечены значком — их можно подтвердить или исключить
-                  через «Хранилище данных…».
-                </div>
-              )}
-
-              {/* Главная кнопка синхронизации — поверх "Хранилище данных" */}
-              <div className="pt-1">
-                <Button
-                  variant="gradient"
-                  className="w-full sm:w-auto"
-                  onClick={() => void runSync(false)}
-                  disabled={!!syncProgress}
-                  title="Скачать актуальные сурсы (без БД, архивов и логов)"
-                >
-                  <CloudDownload className="h-4 w-4" />
-                  {syncProgress ? 'Идёт синхронизация…' : 'Синхронизировать сурсы'}
-                </Button>
-              </div>
-
-              {/* Хранилище данных — мелкой второстепенной кнопкой */}
-              <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => void openHeavyDialog('confirm-and-sync')}
-                  disabled={!!syncProgress || heavyLoading}
-                  title="Уточнить и скачать БД, дампы, архивы и статистику"
-                >
-                  <Database className="h-4 w-4" />
-                  Хранилище данных…
-                </Button>
-                <span>
-                  Файлы БД, бэкапов и архивов лежат в той же структуре, что и на проде, но
-                  качаются отдельно — чтобы случайно не вытянуть гигабайты.
-                </span>
-              </div>
-            </div>
-          )}
-
-          {syncProgress && (
-            <div className="rounded-lg border border-border bg-card/60 p-4 space-y-2">
-              <div className="flex items-center justify-between text-xs">
-                <span className="font-medium text-foreground">
-                  {syncProgress.phase === 'listing' && 'Получаем список файлов с сервера…'}
-                  {syncProgress.phase === 'comparing' && 'Сравниваем с локальной копией…'}
-                  {syncProgress.phase === 'downloading' && 'Скачиваем файлы…'}
-                  {syncProgress.phase === 'cleaning' && 'Удаляем устаревшие…'}
-                  {syncProgress.phase === 'done' && 'Готово'}
-                  {syncProgress.phase === 'error' && 'Ошибка'}
-                </span>
-                <span className="font-mono text-muted-foreground">
-                  {syncProgress.processedFiles ?? 0}/{syncProgress.totalFiles ?? 0}
-                </span>
-              </div>
-              <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted/40">
-                <div
-                  className={
-                    syncProgress.phase === 'done' ? 'h-full bg-emerald-400 transition-all' : 'h-full accent-btn transition-all'
-                  }
-                  style={{
-                    width:
-                      syncProgress.phase === 'done'
-                        ? '100%'
-                        : syncProgress.totalFiles
-                          ? `${Math.round(((syncProgress.processedFiles ?? 0) / syncProgress.totalFiles) * 100)}%`
-                          : '8%',
-                  }}
-                />
-              </div>
-              {syncProgress.currentFile && (
-                <div className="truncate font-mono text-[11px] text-muted-foreground">
-                  {syncProgress.currentFile}
-                </div>
-              )}
-            </div>
-          )}
+          {/* Sync-панели и прогресс перенесены в правую sidebar колонку. */}
 
           {serverNeedsUpdate ? (
             <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-5">
@@ -1486,13 +1375,136 @@ function FileBrowser({
         </CardContent>
       </Card>
 
-      <Card className="lg:sticky lg:top-6 lg:self-start">
-        <CardHeader>
-          <CardTitle>История файла</CardTitle>
-          <CardDescription>
-            {selected ? selected.path : 'Выберите файл слева, чтобы увидеть всю историю.'}
-          </CardDescription>
-        </CardHeader>
+      <div className="space-y-4 lg:sticky lg:top-6 lg:self-start">
+        {isExternal && (
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">Локальная папка</CardTitle>
+              <CardDescription className="text-xs">
+                Сурсы скачиваются на ПК и сохраняют структуру папок проды.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <FolderDown className="accent-fg h-4 w-4 shrink-0" />
+                {extSync?.localPath ? (
+                  <>
+                    <code className="min-w-0 flex-1 break-all rounded bg-background/60 px-2 py-1 font-mono text-[11px] text-foreground/90">
+                      {extSync.localPath}
+                    </code>
+                    <button
+                      className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+                      title="Открыть в проводнике"
+                      onClick={openLocalFolder}
+                    >
+                      <FolderOpen className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      className="text-xs text-muted-foreground underline-offset-2 hover:underline"
+                      onClick={() => void changeLocalFolder()}
+                    >
+                      сменить
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    className="accent-fg text-xs underline-offset-2 hover:underline"
+                    onClick={() => void changeLocalFolder()}
+                  >
+                    выбрать папку
+                  </button>
+                )}
+              </div>
+              {extSync?.lastSyncAt ? (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
+                  <span className="text-foreground">{formatRelativeTime(extSync.lastSyncAt)}</span>
+                  {extSync.lastSyncIncludedHeavy && (
+                    <Badge variant="info">с хранилищем</Badge>
+                  )}
+                </div>
+              ) : (
+                <div className="text-[11px] leading-relaxed text-muted-foreground">
+                  Файлы хранилища данных (БД, бэкапы, архивы) лежат в той же структуре, что и на
+                  проде, но качаются отдельно — настраивается в «Хранилище данных…».
+                </div>
+              )}
+
+              <Button
+                variant="gradient"
+                className="w-full"
+                onClick={() => void runSync(false)}
+                disabled={!!syncProgress}
+                title="Скачать актуальные сурсы (без БД, архивов и логов)"
+              >
+                <CloudDownload className="h-4 w-4" />
+                {syncProgress ? 'Идёт синхронизация…' : 'Синхронизировать сурсы'}
+              </Button>
+
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full"
+                onClick={() => void openHeavyDialog()}
+                disabled={!!syncProgress || heavyLoading}
+                title="Уточнить и скачать БД, дампы, архивы, статистику"
+              >
+                <Database className="h-4 w-4" />
+                Хранилище данных…
+              </Button>
+            </CardContent>
+          </Card>
+        )}
+
+        {syncProgress && (
+          <Card>
+            <CardContent className="space-y-2 py-4">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-medium text-foreground">
+                  {syncProgress.phase === 'listing' && 'Получаем список файлов с сервера…'}
+                  {syncProgress.phase === 'comparing' && 'Сравниваем с локальной копией…'}
+                  {syncProgress.phase === 'downloading' && 'Скачиваем файлы…'}
+                  {syncProgress.phase === 'cleaning' && 'Удаляем устаревшие…'}
+                  {syncProgress.phase === 'done' && 'Готово'}
+                  {syncProgress.phase === 'error' && 'Ошибка'}
+                </span>
+                <span className="font-mono text-muted-foreground">
+                  {syncProgress.processedFiles ?? 0}/{syncProgress.totalFiles ?? 0}
+                </span>
+              </div>
+              <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted/40">
+                <div
+                  className={
+                    syncProgress.phase === 'done'
+                      ? 'h-full bg-emerald-400 transition-all'
+                      : 'h-full accent-btn transition-all'
+                  }
+                  style={{
+                    width:
+                      syncProgress.phase === 'done'
+                        ? '100%'
+                        : syncProgress.totalFiles
+                          ? `${Math.round(((syncProgress.processedFiles ?? 0) / syncProgress.totalFiles) * 100)}%`
+                          : '8%',
+                  }}
+                />
+              </div>
+              {syncProgress.currentFile && (
+                <div className="truncate font-mono text-[11px] text-muted-foreground">
+                  {syncProgress.currentFile}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
+        <Card>
+          <CardHeader>
+            <CardTitle>История файла</CardTitle>
+            <CardDescription>
+              {selected ? selected.path : 'Выберите файл слева, чтобы увидеть всю историю.'}
+            </CardDescription>
+          </CardHeader>
         <CardContent>
           {!selected ? (
             <div className="rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
@@ -1539,52 +1551,99 @@ function FileBrowser({
             </ul>
           )}
         </CardContent>
-      </Card>
+        </Card>
+      </div>
     </div>
 
     <Dialog
       open={heavyDialogOpen}
       onClose={() => setHeavyDialogOpen(false)}
-      title={
-        heavyDialogMode === 'first-time'
-          ? 'Первое подключение: настройка хранилища данных'
-          : 'Хранилище данных — подтверди и скачай'
-      }
-      description={
-        heavyDialogMode === 'first-time'
-          ? 'Прежде чем качать сурсы, определим, что считать хранилищем данных — это БД, бэкапы, архивы и логи. Их обычно не нужно тащить на ПК вместе с исходниками.'
-          : 'Сервер сам прошёлся по дереву файлов и нашёл то, что похоже на хранилище данных. Поправь, если что-то определилось не так.'
-      }
+      title="Хранилище данных — подтверди и скачай"
+      description="Сервер прошёлся по дереву файлов и нашёл то, что похоже на хранилище данных, плюс мусорные папки (node_modules, .git, dist…). Поправь, если что-то определилось не так."
     >
       <div className="space-y-4 text-sm">
         {heavyLoading ? (
           <div className="py-8 text-center text-muted-foreground">Сервер сканирует папку проекта…</div>
-        ) : !heavyCandidates || heavyCandidates.length === 0 ? (
-          <div className="rounded-lg border border-dashed border-border p-6 text-center text-muted-foreground">
-            Не нашлось файлов, похожих на хранилище данных (БД, бэкапы, архивы, логи). Можно
-            смело синхронизировать.
-          </div>
         ) : (
           <>
             <div className="rounded-md bg-muted/20 p-3 text-xs text-muted-foreground">
               {heavyReport?.fallback ? (
                 <>
                   Серверная часть устарела — детекция сделана клиентом по расширениям и триггер-словам.
-                  Обновите сервер на VPS, чтобы получить детекцию по размеру и причинам.
+                  Обновите сервер на VPS, чтобы получить детекцию по размеру и junk-папкам.
                 </>
               ) : (
                 <>
-                  Сервер просканировал {heavyReport?.totalScanned ?? '—'} файлов и определил{' '}
-                  <span className="text-foreground">{heavyCandidates.length}</span> как хранилище
-                  данных. Совокупный объём:{' '}
+                  Сервер просканировал{' '}
+                  <span className="text-foreground">{heavyReport?.totalScanned ?? '—'}</span> файлов
+                  и определил{' '}
+                  <span className="text-foreground">{heavyCandidates?.length ?? 0}</span> как
+                  хранилище данных (
                   <span className="text-foreground">
                     {formatBytes(heavyReport?.totalDataBytes ?? 0)}
                   </span>
-                  .
+                  ). Также автоматически исключил{' '}
+                  <span className="text-foreground">
+                    {heavyReport?.junkDirs?.length ?? 0}
+                  </span>{' '}
+                  мусорных папок (
+                  <span className="text-foreground">
+                    {formatBytes(heavyReport?.totalJunkBytes ?? 0)}
+                  </span>
+                  ).
                 </>
               )}
             </div>
-            <div className="max-h-[50vh] space-y-1 overflow-y-auto rounded-md border border-border bg-muted/10 p-2">
+
+            {/* Junk-папки — информационная секция, всегда исключены */}
+            {heavyReport?.junkDirs && heavyReport.junkDirs.length > 0 && (
+              <div className="space-y-1 rounded-lg border border-rose-500/20 bg-rose-500/5 p-3">
+                <div className="mb-1 flex items-center gap-2 text-xs font-medium text-rose-200">
+                  <Database className="h-3.5 w-3.5" />
+                  Автоматически исключены ({formatBytes(heavyReport.totalJunkBytes)})
+                </div>
+                <div className="max-h-[18vh] space-y-1 overflow-y-auto pr-1">
+                  {heavyReport.junkDirs.map((d) => (
+                    <div
+                      key={d.relPath}
+                      className="flex items-center gap-2 rounded-md px-2 py-1 text-xs"
+                    >
+                      <span className="font-mono text-rose-200/80">{d.relPath}/</span>
+                      <Badge variant="secondary" className="shrink-0">
+                        {d.category === 'dependencies'
+                          ? 'зависимости'
+                          : d.category === 'vcs'
+                            ? 'git/svn'
+                            : d.category === 'build'
+                              ? 'билд'
+                              : d.category === 'cache'
+                                ? 'кэш'
+                                : d.category === 'ide'
+                                  ? 'ide'
+                                  : 'temp'}
+                      </Badge>
+                      <span className="ml-auto shrink-0 font-mono text-[10px] text-muted-foreground">
+                        {d.fileCount} файл. · {formatBytes(d.size)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                <div className="text-[11px] text-muted-foreground">
+                  Это зависимости / автогенерируемый код / git-история — обычно не нужны на ПК.
+                  Если для вашего проекта какая-то из этих папок реально нужна — напишите, добавим
+                  whitelist.
+                </div>
+              </div>
+            )}
+
+            {!heavyCandidates || heavyCandidates.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-border p-6 text-center text-xs text-muted-foreground">
+                Файлов, похожих на хранилище данных, не нашлось. Можно смело синхронизировать
+                сурсы основной кнопкой.
+              </div>
+            ) : null}
+            {heavyCandidates && heavyCandidates.length > 0 && (
+            <div className="max-h-[40vh] space-y-1 overflow-y-auto rounded-md border border-border bg-muted/10 p-2">
               {heavyCandidates.map((f) => {
                 const choice = heavyChoices[f.relPath] ?? 'heavy';
                 return (
@@ -1646,12 +1705,13 @@ function FileBrowser({
                 );
               })}
             </div>
+            )}
           </>
         )}
 
         <div className="flex flex-wrap items-center justify-end gap-2">
           <Button variant="ghost" onClick={() => setHeavyDialogOpen(false)}>
-            {heavyDialogMode === 'first-time' ? 'Позже' : 'Отмена'}
+            Отмена
           </Button>
           <Button
             variant="outline"
@@ -1660,7 +1720,7 @@ function FileBrowser({
           >
             Сохранить правила
           </Button>
-          {heavyDialogMode !== 'first-time' && heavyCandidates && heavyCandidates.length > 0 && (
+          {heavyCandidates && heavyCandidates.length > 0 && (
             <Button
               variant="gradient"
               onClick={() => void applyHeavyAndSync(true)}
