@@ -32,8 +32,13 @@ import {
   FileText,
   ExternalLink,
   Home,
+  Database,
+  FolderDown,
+  FolderOpen,
+  CloudDownload,
 } from 'lucide-react';
 import { Spinner, DotsLoader } from '@/components/ui/spinner';
+import { isHeavyPath } from '@/lib/heavy-files';
 
 interface CommitInfo {
   sha: string;
@@ -738,6 +743,26 @@ function FileBrowser({
   const [fileHistory, setFileHistory] = React.useState<FileHistoryEntry[]>([]);
   const [historyLoading, setHistoryLoading] = React.useState(false);
   const [serverNeedsUpdate, setServerNeedsUpdate] = React.useState(false);
+
+  // External one-way sync state
+  interface ExtSync {
+    projectId: string;
+    localPath: string;
+    excludedPaths: string[];
+    manualPaths: string[];
+    lastSyncAt?: number;
+    lastSyncIncludedHeavy?: boolean;
+  }
+  const [extSync, setExtSync] = React.useState<ExtSync | null>(null);
+  const [syncProgress, setSyncProgress] = React.useState<null | {
+    phase: string;
+    totalFiles?: number;
+    processedFiles?: number;
+    currentFile?: string;
+    downloadedBytes?: number;
+    totalBytes?: number;
+    includeHeavy: boolean;
+  }>(null);
   type SortKey = 'name' | 'size' | 'mtime' | 'author';
   const [sortKey, setSortKey] = React.useState<SortKey>('name');
   const [sortAsc, setSortAsc] = React.useState(true);
@@ -798,6 +823,111 @@ function FileBrowser({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [serverId, projectId]);
 
+  React.useEffect(() => {
+    if (!isExternal) return;
+    void window.backupsApp.externalSync
+      .get(serverId, projectId)
+      .then((s) => setExtSync(s as ExtSync | null));
+  }, [isExternal, serverId, projectId]);
+
+  React.useEffect(() => {
+    if (!isExternal) return;
+    const off = window.backupsApp.externalSync.onProgress((p) => {
+      if (p.serverId !== serverId || p.projectId !== projectId) return;
+      setSyncProgress((prev) => ({
+        phase: p.phase,
+        totalFiles: p.totalFiles ?? prev?.totalFiles,
+        processedFiles: p.processedFiles ?? prev?.processedFiles,
+        downloadedBytes: p.downloadedBytes ?? prev?.downloadedBytes,
+        totalBytes: p.totalBytes ?? prev?.totalBytes,
+        currentFile: p.currentFile ?? prev?.currentFile,
+        includeHeavy: prev?.includeHeavy ?? false,
+      }));
+      if (p.phase === 'done' || p.phase === 'error') {
+        setTimeout(() => setSyncProgress(null), 1500);
+      }
+    });
+    return off;
+  }, [isExternal, serverId, projectId]);
+
+  async function chooseLocalFolder(): Promise<string | null> {
+    const res = (await window.backupsApp.externalSync.chooseFolder()) as string | null;
+    return res;
+  }
+
+  async function runSync(includeHeavy: boolean) {
+    let localPath = extSync?.localPath ?? null;
+    if (!localPath) {
+      localPath = await chooseLocalFolder();
+      if (!localPath) return;
+    }
+    setSyncProgress({ phase: 'listing', includeHeavy });
+    try {
+      const result = (await window.backupsApp.externalSync.run({
+        serverId,
+        projectId,
+        localPath,
+        includeHeavy,
+        manualPaths: extSync?.manualPaths,
+        excludedPaths: extSync?.excludedPaths,
+        prune: false,
+      })) as { downloaded: number; skipped: number; bytes: number };
+      const fresh = (await window.backupsApp.externalSync.get(serverId, projectId)) as ExtSync | null;
+      setExtSync(fresh);
+      const sizeMb = (result.bytes / 1024 / 1024).toFixed(1);
+      addToast({
+        type: 'success',
+        text: `Синхронизировано: ${result.downloaded} файлов (${sizeMb} МБ), пропущено ${result.skipped}`,
+      });
+    } catch (e) {
+      addToast({ type: 'error', text: (e as Error).message });
+      setSyncProgress(null);
+    }
+  }
+
+  async function changeLocalFolder() {
+    const next = await chooseLocalFolder();
+    if (!next) return;
+    if (extSync) {
+      setExtSync({ ...extSync, localPath: next });
+    } else {
+      setExtSync({
+        projectId,
+        localPath: next,
+        excludedPaths: [],
+        manualPaths: [],
+      });
+    }
+    addToast({ type: 'info', text: 'Папка обновлена. Нажмите «Синхронизировать», чтобы скачать.' });
+  }
+
+  function openLocalFolder() {
+    if (extSync?.localPath) void window.backupsApp.externalSync.openFolder(extSync.localPath);
+  }
+
+  async function toggleManual(relPath: string, makeManual: boolean) {
+    const cur = extSync ?? {
+      projectId,
+      localPath: '',
+      excludedPaths: [],
+      manualPaths: [],
+    };
+    const nextManual = makeManual
+      ? Array.from(new Set([...(cur.manualPaths ?? []), relPath]))
+      : (cur.manualPaths ?? []).filter((p) => p !== relPath);
+    if (!cur.localPath) {
+      // ничего не сохраняем на бэк, только локально пока папки нет
+      setExtSync({ ...cur, manualPaths: nextManual });
+      return;
+    }
+    const updated = (await window.backupsApp.externalSync.setRules({
+      serverId,
+      projectId,
+      manualPaths: nextManual,
+    })) as ExtSync | null;
+    setExtSync(updated ?? { ...cur, manualPaths: nextManual });
+  }
+
   async function selectFile(entry: TreeEntry) {
     setSelected(entry);
     setHistoryLoading(true);
@@ -851,12 +981,39 @@ function FileBrowser({
           <div>
             <CardTitle>Файлы проекта</CardTitle>
             <CardDescription>
-              Содержимое последней версии на сервере. Видно, кто и когда менял каждый файл.
+              {isExternal
+                ? 'Live-зеркало папки на проде. Синхронизируйте на ваш ПК — файлы скачаются в локальную папку.'
+                : 'Содержимое последней версии на сервере. Видно, кто и когда менял каждый файл.'}
             </CardDescription>
           </div>
-          <Button variant="outline" onClick={() => loadTree()}>
-            <RefreshCcw className="h-4 w-4" /> Обновить
-          </Button>
+          <div className="flex items-center gap-2">
+            {isExternal && (
+              <>
+                <Button
+                  variant="gradient"
+                  onClick={() => void runSync(false)}
+                  disabled={!!syncProgress}
+                  title="Скачать актуальные сурсы (без БД и архивов)"
+                >
+                  <CloudDownload className="h-4 w-4" />
+                  {syncProgress ? 'Идёт синхр…' : 'Синхронизировать'}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void runSync(true)}
+                  disabled={!!syncProgress}
+                  title="Скачать ВСЁ, включая БД, дампы, архивы, логи"
+                >
+                  <Database className="h-4 w-4" />
+                  Тяжёлые
+                </Button>
+              </>
+            )}
+            <Button variant="outline" onClick={() => loadTree()}>
+              <RefreshCcw className="h-4 w-4" /> Обновить
+            </Button>
+          </div>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex flex-wrap items-center gap-1 rounded-lg border border-border bg-muted/20 px-3 py-2 text-sm">
@@ -883,10 +1040,99 @@ function FileBrowser({
             })}
           </div>
 
-          {syncedFolder && (
+          {syncedFolder && !isExternal && (
             <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-3 py-2 text-xs text-muted-foreground">
               Локальная папка синхронизации:{' '}
               <code className="font-mono text-foreground">{syncedFolder}</code>
+            </div>
+          )}
+
+          {isExternal && (
+            <div className="rounded-lg border border-border bg-muted/20 p-3 space-y-2">
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <FolderDown className="accent-fg h-4 w-4" />
+                <span className="text-muted-foreground">Локальная папка:</span>
+                {extSync?.localPath ? (
+                  <>
+                    <code className="rounded bg-background/60 px-2 py-1 font-mono text-[11px] text-foreground/90 break-all">
+                      {extSync.localPath}
+                    </code>
+                    <button
+                      className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+                      title="Открыть в проводнике"
+                      onClick={openLocalFolder}
+                    >
+                      <FolderOpen className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      className="text-xs text-muted-foreground underline-offset-2 hover:underline"
+                      onClick={() => void changeLocalFolder()}
+                    >
+                      сменить
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    className="text-xs accent-fg underline-offset-2 hover:underline"
+                    onClick={() => void changeLocalFolder()}
+                  >
+                    выбрать папку
+                  </button>
+                )}
+              </div>
+              {extSync?.lastSyncAt ? (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
+                  Последняя синхронизация:{' '}
+                  <span className="text-foreground">{formatRelativeTime(extSync.lastSyncAt)}</span>
+                  {extSync.lastSyncIncludedHeavy && (
+                    <Badge variant="info">с тяжёлыми</Badge>
+                  )}
+                </div>
+              ) : (
+                <div className="text-xs text-muted-foreground">
+                  Ещё не синхронизировано. Тяжёлые файлы (БД, дампы, архивы, логи) скачиваются
+                  отдельной кнопкой «Тяжёлые».
+                </div>
+              )}
+            </div>
+          )}
+
+          {syncProgress && (
+            <div className="rounded-lg border border-border bg-card/60 p-4 space-y-2">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-medium text-foreground">
+                  {syncProgress.phase === 'listing' && 'Получаем список файлов с сервера…'}
+                  {syncProgress.phase === 'comparing' && 'Сравниваем с локальной копией…'}
+                  {syncProgress.phase === 'downloading' && 'Скачиваем файлы…'}
+                  {syncProgress.phase === 'cleaning' && 'Удаляем устаревшие…'}
+                  {syncProgress.phase === 'done' && 'Готово'}
+                  {syncProgress.phase === 'error' && 'Ошибка'}
+                </span>
+                <span className="font-mono text-muted-foreground">
+                  {syncProgress.processedFiles ?? 0}/{syncProgress.totalFiles ?? 0}
+                </span>
+              </div>
+              <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted/40">
+                <div
+                  className={
+                    syncProgress.phase === 'done' ? 'h-full bg-emerald-400 transition-all' : 'h-full accent-btn transition-all'
+                  }
+                  style={{
+                    width:
+                      syncProgress.phase === 'done'
+                        ? '100%'
+                        : syncProgress.totalFiles
+                          ? `${Math.round(((syncProgress.processedFiles ?? 0) / syncProgress.totalFiles) * 100)}%`
+                          : '8%',
+                  }}
+                />
+              </div>
+              {syncProgress.currentFile && (
+                <div className="truncate font-mono text-[11px] text-muted-foreground">
+                  {syncProgress.currentFile}
+                </div>
+              )}
             </div>
           )}
 
@@ -955,7 +1201,18 @@ function FileBrowser({
                         )}
                       </span>
                       <span className="min-w-0">
-                        <span className="block truncate font-medium">{entry.name}</span>
+                        <span className="flex items-center gap-1.5 font-medium">
+                          <span className="truncate">{entry.name}</span>
+                          {isExternal && entry.type === 'file' && isHeavyPath(entry.path) && (
+                            extSync?.manualPaths?.includes(entry.path) ? (
+                              <Badge variant="success" className="shrink-0">manual</Badge>
+                            ) : (
+                              <span title="Тяжёлый файл (БД/дамп/архив). Качается только по кнопке «Тяжёлые».">
+                                <Database className="h-3.5 w-3.5 shrink-0 text-amber-400/80" />
+                              </span>
+                            )
+                          )}
+                        </span>
                         {!isExternal && (
                           <span className="block truncate text-xs text-muted-foreground">
                             {entry.type === 'dir' ? 'папка' : formatBytes(entry.size ?? 0)}
@@ -990,6 +1247,24 @@ function FileBrowser({
                           {!isExternal && (
                             <Button variant="ghost" size="sm" title="История файла" onClick={() => selectFile(entry)}>
                               <History className="h-4 w-4" />
+                            </Button>
+                          )}
+                          {isExternal && isHeavyPath(entry.path) && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              title={
+                                extSync?.manualPaths?.includes(entry.path)
+                                  ? 'Убрать из списка автоматической синхронизации'
+                                  : 'Всегда синхронизировать этот тяжёлый файл'
+                              }
+                              onClick={() => void toggleManual(entry.path, !extSync?.manualPaths?.includes(entry.path))}
+                            >
+                              {extSync?.manualPaths?.includes(entry.path) ? (
+                                <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+                              ) : (
+                                <Plus className="h-4 w-4" />
+                              )}
                             </Button>
                           )}
                           <Button variant="ghost" size="sm" title="Открыть файл" onClick={() => openFile(entry)}>

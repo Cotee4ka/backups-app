@@ -28,6 +28,19 @@ interface StoredServer {
   lastConnectedAt?: number;
   // sync settings
   syncedFolders: SyncedFolder[];
+  externalSyncs?: ExternalSync[];
+}
+
+export interface ExternalSync {
+  projectId: string;
+  localPath: string;
+  /** Glob/regex-исключения от пользователя сверху defaults */
+  excludedPaths: string[];
+  /** Файлы, которые подходят под "тяжёлые" триггеры, но юзер хочет синхронизировать */
+  manualPaths: string[];
+  lastSyncAt?: number;
+  /** Was last sync done with includeHeavy=true */
+  lastSyncIncludedHeavy?: boolean;
 }
 
 export interface SyncedFolder {
@@ -223,6 +236,29 @@ class Store {
     const s = this.getServer(serverId);
     if (!s) return;
     s.syncedFolders = s.syncedFolders.filter((f) => f.projectId !== projectId);
+    this.save();
+  }
+
+  // --- External syncs ---
+
+  getExternalSync(serverId: string, projectId: string): ExternalSync | undefined {
+    return this.getServer(serverId)?.externalSyncs?.find((s) => s.projectId === projectId);
+  }
+
+  setExternalSync(serverId: string, sync: ExternalSync): void {
+    const s = this.getServer(serverId);
+    if (!s) return;
+    if (!s.externalSyncs) s.externalSyncs = [];
+    const idx = s.externalSyncs.findIndex((x) => x.projectId === sync.projectId);
+    if (idx === -1) s.externalSyncs.push(sync);
+    else s.externalSyncs[idx] = sync;
+    this.save();
+  }
+
+  removeExternalSync(serverId: string, projectId: string): void {
+    const s = this.getServer(serverId);
+    if (!s?.externalSyncs) return;
+    s.externalSyncs = s.externalSyncs.filter((x) => x.projectId !== projectId);
     this.save();
   }
 

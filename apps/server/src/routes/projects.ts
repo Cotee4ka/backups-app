@@ -21,6 +21,7 @@ import {
   browseHost,
   externalFileExists,
   listExternalTree,
+  listExternalTreeRecursive,
   resolveHostPath,
   statExternalFile,
 } from '../host-fs.js';
@@ -408,6 +409,36 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
 
     const entries = await listTree(params.id, query.ref, query.path, true);
     return reply.send({ ref: query.ref, path: query.path, entries });
+  });
+
+  app.get('/projects/:id/tree-recursive', async (req, reply) => {
+    const me = await requireAuth(req);
+    const params = z.object({ id: z.string() }).parse(req.params);
+    const query = z.object({ path: z.string().default('') }).parse(req.query);
+
+    const project = getProject(params.id);
+    if (!project) return reply.code(404).send({ error: 'Not found' });
+
+    const isMember = getDb()
+      .prepare(`SELECT 1 FROM project_members WHERE project_id = ? AND user_id = ?`)
+      .get(params.id, me.id);
+    if (!isMember && me.role !== 'owner' && me.role !== 'admin') {
+      return reply.code(403).send({ error: 'Forbidden' });
+    }
+
+    if (!project.external_path) {
+      return reply.code(400).send({ error: 'Recursive tree only for external projects' });
+    }
+
+    try {
+      const result = await listExternalTreeRecursive(project.external_path, query.path);
+      return reply.send({ path: query.path, entries: result.entries, truncated: result.truncated });
+    } catch (e) {
+      if (e instanceof InvalidHostPathError) {
+        return reply.code(400).send({ error: e.message });
+      }
+      throw e;
+    }
   });
 
   app.get('/projects/:id/file/history', async (req, reply) => {
