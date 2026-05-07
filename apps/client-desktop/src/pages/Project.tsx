@@ -40,6 +40,7 @@ import {
   RefreshCw,
   Search,
   X,
+  Paperclip,
 } from 'lucide-react';
 import { Spinner, DotsLoader } from '@/components/ui/spinner';
 import { isHeavyPath } from '@/lib/heavy-files';
@@ -1560,31 +1561,28 @@ function FileBrowser({
                         ) : (
                           <FileText className="accent-fg h-5 w-5 opacity-60" />
                         )}
-                        {/* Неоновая «скрепка» — мелкая полоска в углу иконки. */}
+                        {/* Неоновая скрепка — overlay в углу иконки. Paperclip
+                            сам по себе под углом, неон делаем drop-shadow'ом. */}
                         {status === 'synced' && (
-                          <span
-                            title="Совпадает с продой"
-                            className="absolute bottom-0.5 right-0.5 h-2 w-0.5 rounded-full bg-emerald-400/70 shadow-[0_0_3px_rgba(74,222,128,0.9)]"
-                          />
+                          <span title="Совпадает с продой" className="absolute -bottom-0.5 -right-0.5 leading-none">
+                            <Paperclip className="h-3 w-3 text-emerald-400/80 drop-shadow-[0_0_3px_rgba(74,222,128,0.95)]" />
+                          </span>
                         )}
                         {status === 'modified' && (
-                          <span
-                            title="Изменён локально"
-                            className="absolute bottom-0.5 right-0.5 h-2 w-0.5 rounded-full bg-amber-400/70 shadow-[0_0_3px_rgba(251,191,36,0.85)]"
-                          />
+                          <span title="Изменён локально" className="absolute -bottom-0.5 -right-0.5 leading-none">
+                            <Paperclip className="h-3 w-3 text-amber-400/80 drop-shadow-[0_0_3px_rgba(251,191,36,0.85)]" />
+                          </span>
                         )}
                         {status === 'missing' && (
-                          <span
-                            title="Не скачано на ПК"
-                            className="absolute bottom-0.5 right-0.5 h-2 w-0.5 rounded-full bg-slate-400/30"
-                          />
+                          <span title="Не скачано на ПК" className="absolute -bottom-0.5 -right-0.5 leading-none">
+                            <Paperclip className="h-3 w-3 text-slate-400/30" />
+                          </span>
                         )}
-                        {/* Папка: все её файлы синхронизированы (без БД и excluded). */}
+                        {/* Папка: все её файлы (рекурсивно) синхронизированы. */}
                         {entry.type === 'dir' && folderAllSynced && (
-                          <span
-                            title="Все файлы папки скачаны и совпадают с продой"
-                            className="absolute bottom-0.5 right-0.5 h-2 w-0.5 rounded-full bg-emerald-400/70 shadow-[0_0_3px_rgba(74,222,128,0.9)]"
-                          />
+                          <span title="Все файлы папки скачаны и совпадают с продой" className="absolute -bottom-0.5 -right-0.5 leading-none">
+                            <Paperclip className="h-3 w-3 text-emerald-400/80 drop-shadow-[0_0_3px_rgba(74,222,128,0.95)]" />
+                          </span>
                         )}
                       </span>
                       <span className="min-w-0">
@@ -2444,6 +2442,24 @@ function DataStorePicker({
                 (entry.type === 'file' && isHeavyPath(entry.path)) ||
                 (entry.type === 'dir' && isHeavyPath(entry.name));
               const alreadyPicked = pickedPaths.has(entry.path);
+              // Зелёная скрепка для папки: все её файлы (рекурсивно) synced.
+              // Heavy и junk-файлы из проверки исключаем.
+              let folderAllSynced = false;
+              if (entry.type === 'dir' && globalStatuses.size > 0) {
+                const prefix = entry.path + '/';
+                let any = false;
+                let allOk = true;
+                for (const [p, st] of globalStatuses) {
+                  if (!p.startsWith(prefix)) continue;
+                  if (serverHeavyPaths.has(p)) continue;
+                  any = true;
+                  if (st !== 'synced') {
+                    allOk = false;
+                    break;
+                  }
+                }
+                folderAllSynced = any && allOk;
+              }
               return (
                 <li
                   key={entry.path}
@@ -2460,10 +2476,24 @@ function DataStorePicker({
                         <FileText className="accent-fg h-4 w-4 opacity-60" />
                       )}
                       {status === 'synced' && (
-                        <span className="absolute bottom-0.5 right-0.5 h-1.5 w-0.5 rounded-full bg-emerald-400/70 shadow-[0_0_2px_rgba(74,222,128,0.9)]" />
+                        <span title="Совпадает с продой" className="absolute -bottom-0.5 -right-0.5 leading-none">
+                          <Paperclip className="h-2.5 w-2.5 text-emerald-400/80 drop-shadow-[0_0_2px_rgba(74,222,128,0.95)]" />
+                        </span>
                       )}
                       {status === 'modified' && (
-                        <span className="absolute bottom-0.5 right-0.5 h-1.5 w-0.5 rounded-full bg-amber-400/70 shadow-[0_0_2px_rgba(251,191,36,0.85)]" />
+                        <span title="Изменён локально" className="absolute -bottom-0.5 -right-0.5 leading-none">
+                          <Paperclip className="h-2.5 w-2.5 text-amber-400/80 drop-shadow-[0_0_2px_rgba(251,191,36,0.85)]" />
+                        </span>
+                      )}
+                      {status === 'missing' && (
+                        <span title="Не скачано на ПК" className="absolute -bottom-0.5 -right-0.5 leading-none">
+                          <Paperclip className="h-2.5 w-2.5 text-slate-400/30" />
+                        </span>
+                      )}
+                      {entry.type === 'dir' && folderAllSynced && (
+                        <span title="Все файлы папки скачаны и совпадают с продой" className="absolute -bottom-0.5 -right-0.5 leading-none">
+                          <Paperclip className="h-2.5 w-2.5 text-emerald-400/80 drop-shadow-[0_0_2px_rgba(74,222,128,0.95)]" />
+                        </span>
                       )}
                     </span>
                     <span className="min-w-0">
