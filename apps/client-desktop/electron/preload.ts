@@ -100,6 +100,18 @@ const api = {
       ipcRenderer.invoke('externalSync:listHeavy', { serverId, projectId }),
     detectDataStore: (serverId: string, projectId: string) =>
       ipcRenderer.invoke('externalSync:detectDataStore', { serverId, projectId }),
+    fileStatuses: (
+      serverId: string,
+      projectId: string,
+      files: Array<{ relPath: string; size: number; mtime: number }>,
+    ) => ipcRenderer.invoke('externalSync:fileStatuses', { serverId, projectId, files }),
+    downloadToLocal: (serverId: string, projectId: string, pathInRepo: string, ref = 'HEAD') =>
+      ipcRenderer.invoke('externalSync:downloadToLocal', {
+        serverId,
+        projectId,
+        path: pathInRepo,
+        ref,
+      }),
     run: (params: {
       serverId: string;
       projectId: string;
@@ -107,6 +119,7 @@ const api = {
       includeHeavy: boolean;
       manualPaths?: string[];
       excludedPaths?: string[];
+      manualHeavyPaths?: string[];
       prune?: boolean;
     }) => ipcRenderer.invoke('externalSync:run', params),
     setRules: (params: {
@@ -114,6 +127,7 @@ const api = {
       projectId: string;
       manualPaths?: string[];
       excludedPaths?: string[];
+      manualHeavyPaths?: string[];
     }) => ipcRenderer.invoke('externalSync:setRules', params),
     onProgress: (
       cb: (p: {
