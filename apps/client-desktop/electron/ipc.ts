@@ -112,7 +112,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
 
     const stored: StoredServer = {
       id: crypto.randomUUID(),
-      name: `${result.adminUsername}@${new URL(result.serverUrl).hostname}`,
+      name: new URL(result.serverUrl).hostname,
       url: result.serverUrl,
       origin,
       fingerprint: result.fingerprint,
@@ -149,7 +149,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     });
     const stored: StoredServer = {
       id: crypto.randomUUID(),
-      name: `${params.username}@${new URL(url).hostname}`,
+      name: new URL(url).hostname,
       url,
       origin,
       fingerprint,
@@ -170,6 +170,15 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   ipcMain.handle('servers:delete', async (_e, id: string) => {
     getServerStore().deleteServer(id);
     return { ok: true };
+  });
+
+  ipcMain.handle('servers:rename', async (_e, { serverId, name }: { serverId: string; name: string }) => {
+    const store = getServerStore();
+    const server = store.getServer(serverId);
+    if (!server) throw new Error('Server not found');
+    const updated = { ...server, name: name.trim() || server.name };
+    store.upsertServer(updated);
+    return stripSecrets(updated);
   });
 
   // ---------- Projects (proxy to server API) ----------

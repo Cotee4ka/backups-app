@@ -27,6 +27,7 @@ const api = {
       password: string;
     }) => ipcRenderer.invoke('servers:connect', params),
     delete: (id: string) => ipcRenderer.invoke('servers:delete', id),
+    rename: (id: string, name: string) => ipcRenderer.invoke('servers:rename', { serverId: id, name }),
     onInstallLog: (cb: (msg: { line: string; type: 'stdout' | 'stderr' | 'info' }) => void) => {
       const sub = (_e: unknown, msg: { line: string; type: 'stdout' | 'stderr' | 'info' }) =>
         cb(msg);

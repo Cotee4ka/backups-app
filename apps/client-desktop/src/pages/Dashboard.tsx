@@ -33,8 +33,8 @@ export const DashboardPage = () => {
       {servers.length === 0 ? (
         <Card className="border-dashed">
           <CardContent className="flex flex-col items-center gap-4 py-16 text-center">
-            <div className="grid h-16 w-16 place-items-center rounded-2xl bg-gradient-to-br from-blue-500/20 via-violet-500/20 to-fuchsia-500/20">
-              <Cloud className="h-8 w-8 text-violet-300" />
+            <div className="accent-bg grid h-16 w-16 place-items-center rounded-2xl">
+              <Cloud className="accent-fg h-8 w-8" />
             </div>
             <div>
               <h2 className="text-xl font-semibold">Подключите первый сервер</h2>
@@ -45,7 +45,7 @@ export const DashboardPage = () => {
             <div className="mt-2 flex gap-2">
               <Link
                 to="/wizard/create"
-                className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-gradient-to-br from-blue-500 via-violet-500 to-fuchsia-500 px-5 text-sm font-medium text-white shadow-lg shadow-violet-500/25 hover:opacity-95"
+                className="accent-btn inline-flex h-10 items-center justify-center gap-2 rounded-md px-5 text-sm font-medium"
               >
                 <Plus className="h-4 w-4" /> Создать сервер
               </Link>
@@ -66,8 +66,8 @@ export const DashboardPage = () => {
                 <CardHeader className="pb-3">
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex items-center gap-3">
-                      <div className="grid h-10 w-10 place-items-center rounded-lg bg-gradient-to-br from-blue-500/20 via-violet-500/15 to-fuchsia-500/15">
-                        <Server className="h-5 w-5 text-violet-300" />
+                      <div className="accent-bg grid h-10 w-10 place-items-center rounded-lg">
+                        <Server className="accent-fg h-5 w-5" />
                       </div>
                       <div>
                         <CardTitle className="text-base">{s.name}</CardTitle>
