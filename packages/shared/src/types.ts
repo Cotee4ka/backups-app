@@ -57,11 +57,27 @@ export interface Project {
   totalSize?: number;
   lastCommitSha?: CommitSha;
   lastCommitAt?: number;
+  /** Если задан — проект это read-only зеркало папки на VPS, без git-истории. */
+  externalPath?: string;
 }
 
 export interface CreateProjectRequest {
   name: string;
   description?: string;
+}
+
+export interface CreateExternalProjectRequest {
+  name: string;
+  description?: string;
+  hostPath: string;
+}
+
+export interface HostBrowseEntry {
+  name: string;
+  path: string;
+  type: 'file' | 'dir';
+  size: number | null;
+  mtime: number;
 }
 
 export interface ProjectMember {

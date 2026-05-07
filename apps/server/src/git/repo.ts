@@ -1,5 +1,6 @@
 import path from 'node:path';
 import fs from 'node:fs/promises';
+import { spawn } from 'node:child_process';
 import { simpleGit, type SimpleGit } from 'simple-git';
 import { config } from '../config.js';
 import type { CommitInfo, CommitDetail, FileDiff } from '@backups-app/shared';
@@ -218,4 +219,233 @@ export function reposBaseDir(): string {
 
 export function repoDirFor(projectId: string): string {
   return repoPath(projectId);
+}
+
+export interface TreeEntry {
+  name: string;
+  path: string;
+  type: 'file' | 'dir';
+  size: number | null;
+  mode: string;
+  oid: string;
+  lastCommit?: {
+    sha: string;
+    shortSha: string;
+    message: string;
+    authorId: string;
+    authorName: string;
+    timestamp: number;
+  };
+}
+
+export async function hasAnyCommits(projectId: string): Promise<boolean> {
+  const repo = await ensureRepo(projectId);
+  const g = gitFor(repo);
+  try {
+    await g.revparse(['HEAD']);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function listTree(
+  projectId: string,
+  ref: string,
+  subPath: string,
+  withLastCommit = true,
+): Promise<TreeEntry[]> {
+  const repo = await ensureRepo(projectId);
+  if (!(await hasAnyCommits(projectId))) return [];
+
+  const g = gitFor(repo);
+  const safePath = subPath.replace(/^\/+/, '').replace(/\/+$/, '');
+  const target = safePath ? `${ref}:${safePath}` : `${ref}:`;
+  let raw: string;
+  try {
+    raw = await g.raw(['ls-tree', '--long', target]);
+  } catch {
+    return [];
+  }
+
+  const entries: TreeEntry[] = [];
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue;
+    // Format: <mode> SP <type> SP <oid> SP <size|->\t<name>
+    const tabIdx = line.indexOf('\t');
+    if (tabIdx === -1) continue;
+    const meta = line.slice(0, tabIdx).trim().split(/\s+/);
+    const name = line.slice(tabIdx + 1);
+    if (meta.length < 4) continue;
+    const mode = meta[0]!;
+    const type = meta[1]!;
+    const oid = meta[2]!;
+    const sizeStr = meta[3]!;
+    if (type !== 'blob' && type !== 'tree') continue;
+    entries.push({
+      name,
+      path: safePath ? `${safePath}/${name}` : name,
+      type: type === 'blob' ? 'file' : 'dir',
+      size: type === 'blob' && sizeStr !== '-' ? Number(sizeStr) : null,
+      mode,
+      oid,
+    });
+  }
+
+  if (withLastCommit) {
+    await Promise.all(
+      entries.map(async (e) => {
+        try {
+          const log = await g.raw([
+            'log',
+            '-1',
+            `--format=%H%x00%an%x00%aI%x00%s`,
+            ref,
+            '--',
+            e.path,
+          ]);
+          const trimmed = log.trim();
+          if (!trimmed) return;
+          const [sha, authorRaw, dateIso, message] = trimmed.split('\u0000');
+          if (!sha) return;
+          const [authorId, ...rest] = (authorRaw ?? '').split('|');
+          e.lastCommit = {
+            sha,
+            shortSha: sha.slice(0, 7),
+            message: message ?? '',
+            authorId: authorId || 'unknown',
+            authorName: rest.join('|') || authorRaw || 'unknown',
+            timestamp: new Date(dateIso ?? Date.now()).getTime(),
+          };
+        } catch {
+          /* ignore */
+        }
+      }),
+    );
+  }
+
+  entries.sort((a, b) => {
+    if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+
+  return entries;
+}
+
+export interface FileHistoryEntry {
+  sha: string;
+  shortSha: string;
+  message: string;
+  authorId: string;
+  authorName: string;
+  timestamp: number;
+  insertions: number;
+  deletions: number;
+  changeType: 'added' | 'modified' | 'deleted' | 'renamed';
+  oldPath?: string;
+}
+
+export async function fileHistory(
+  projectId: string,
+  filePath: string,
+  limit = 100,
+): Promise<FileHistoryEntry[]> {
+  const repo = await ensureRepo(projectId);
+  if (!(await hasAnyCommits(projectId))) return [];
+
+  const g = gitFor(repo);
+  const out = await g
+    .raw([
+      'log',
+      `-${limit}`,
+      '--follow',
+      '--numstat',
+      '--format=%x01%H%x00%an%x00%aI%x00%s',
+      '--',
+      filePath,
+    ])
+    .catch(() => '');
+
+  const entries: FileHistoryEntry[] = [];
+  const blocks = out.split('\u0001').filter((b) => b.trim());
+  for (const block of blocks) {
+    const lines = block.split('\n');
+    const header = lines.shift() ?? '';
+    const [sha, authorRaw, dateIso, message] = header.split('\u0000');
+    if (!sha) continue;
+    const [authorId, ...rest] = (authorRaw ?? '').split('|');
+    let insertions = 0;
+    let deletions = 0;
+    let oldPath: string | undefined;
+    for (const ln of lines) {
+      if (!ln.trim()) continue;
+      const parts = ln.split('\t');
+      if (parts.length < 3) continue;
+      const ins = parts[0] === '-' ? 0 : Number(parts[0]);
+      const del = parts[1] === '-' ? 0 : Number(parts[1]);
+      insertions += isNaN(ins) ? 0 : ins;
+      deletions += isNaN(del) ? 0 : del;
+      // Parse rename like "old => new"
+      const arrowed = parts.slice(2).join('\t');
+      const m = /^(.*) => (.*)$/.exec(arrowed);
+      if (m) {
+        oldPath = (m[1] ?? '').replace(/[{}]/g, '');
+      }
+    }
+    entries.push({
+      sha,
+      shortSha: sha.slice(0, 7),
+      message: message ?? '',
+      authorId: authorId || 'unknown',
+      authorName: rest.join('|') || authorRaw || 'unknown',
+      timestamp: new Date(dateIso ?? Date.now()).getTime(),
+      insertions,
+      deletions,
+      changeType: 'modified',
+      oldPath,
+    });
+  }
+  return entries;
+}
+
+/**
+ * Стримит содержимое файла из репозитория наружу. Безопасно для больших и
+ * бинарных файлов. Бросает, если путь указывает не на blob.
+ */
+export async function readBlob(
+  projectId: string,
+  ref: string,
+  filePath: string,
+): Promise<{ size: number; stream: NodeJS.ReadableStream }> {
+  const repo = await ensureRepo(projectId);
+  const g = gitFor(repo);
+  const safePath = filePath.replace(/^\/+/, '');
+  // size from cat-file -s
+  const sizeRaw = await g.raw(['cat-file', '-s', `${ref}:${safePath}`]);
+  const size = Number(sizeRaw.trim());
+  // stream content
+  const proc = spawn('git', ['cat-file', 'blob', `${ref}:${safePath}`], {
+    cwd: repo,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  return { size, stream: proc.stdout };
+}
+
+export async function fileExistsAt(
+  projectId: string,
+  ref: string,
+  filePath: string,
+): Promise<boolean> {
+  const repo = await ensureRepo(projectId);
+  const g = gitFor(repo);
+  try {
+    const out = await g.raw([
+      'cat-file',
+      '-t',
+      `${ref}:${filePath.replace(/^\/+/, '')}`,
+    ]);
+    return out.trim() === 'blob';
+  } catch {
+    return false;
+  }
 }

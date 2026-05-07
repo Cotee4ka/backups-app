@@ -30,6 +30,7 @@ export function getDb(): Database.Database {
       default_branch TEXT NOT NULL DEFAULT 'main',
       created_at INTEGER NOT NULL,
       created_by TEXT NOT NULL,
+      external_path TEXT,
       FOREIGN KEY (created_by) REFERENCES users(id)
     );
 
@@ -76,6 +77,13 @@ export function getDb(): Database.Database {
       FOREIGN KEY (used_by) REFERENCES users(id)
     );
   `);
+
+  const projectCols = db
+    .prepare(`PRAGMA table_info(projects)`)
+    .all() as { name: string }[];
+  if (!projectCols.some((c) => c.name === 'external_path')) {
+    db.exec(`ALTER TABLE projects ADD COLUMN external_path TEXT`);
+  }
 
   _db = db;
   return db;

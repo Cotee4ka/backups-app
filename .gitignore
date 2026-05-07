@@ -8,6 +8,9 @@ coverage/
 
 # Electron build output
 release/
+release-*/
+dist-electron/
+dist/
 
 # IDE
 .vscode/
@@ -34,3 +37,10 @@ logs/
 
 # pnpm
 .pnpm-store/
+pnpm-list.txt
+
+# TypeScript incremental
+*.tsbuildinfo
+
+# Claude Code local settings
+.claude/settings.local.json

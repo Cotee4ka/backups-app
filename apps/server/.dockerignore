@@ -1,0 +1,15 @@
+**/node_modules
+**/dist
+**/build
+**/out
+**/.next
+**/.turbo
+**/.cache
+**/coverage
+**/.git
+**/release
+apps/server/data
+apps/server/repos
+apps/server/certs
+apps/client-desktop
+*.log

@@ -16,7 +16,7 @@ import { projectRoutes } from './routes/projects.js';
 import { auditRoutes } from './routes/audit.js';
 import { inviteRoutes } from './routes/invites.js';
 import { gitHttpRoutes } from './git/http.js';
-import { countUsers, createUser, hashPassword } from './auth.js';
+import { countUsers, hashPassword, upsertBootstrapUser } from './auth.js';
 
 async function bootstrap() {
   fs.mkdirSync(config.dataDir, { recursive: true });
@@ -25,28 +25,25 @@ async function bootstrap() {
 
   getDb();
 
-  if (
-    config.bootstrapAdminUser &&
-    config.bootstrapAdminPassword &&
-    countUsers() === 0
-  ) {
+  if (config.bootstrapAdminUser && config.bootstrapAdminPassword) {
     const hash = await hashPassword(config.bootstrapAdminPassword);
-    createUser(config.bootstrapAdminUser, hash, 'owner');
-    console.log(`[bootstrap] created owner: ${config.bootstrapAdminUser}`);
+    upsertBootstrapUser(config.bootstrapAdminUser, hash, 'owner');
+    console.log(`[bootstrap] ensured owner: ${config.bootstrapAdminUser}`);
   }
 
   const tls = config.tlsEnabled ? await ensureTls() : null;
+  let rawServer: http.Server | https.Server | null = null;
 
   const app = Fastify({
     logger: { level: process.env.LOG_LEVEL ?? 'info' },
     serverFactory: (handler) => {
-      const server = tls
+      rawServer = tls
         ? https.createServer({ key: tls.key, cert: tls.cert }, handler)
         : http.createServer(handler);
-      setupWebSocket(app, server);
-      return server;
+      return rawServer;
     },
   });
+  setupWebSocket(app, rawServer ?? app.server);
 
   await app.register(sensible);
   await app.register(cors, { origin: true, credentials: true });
