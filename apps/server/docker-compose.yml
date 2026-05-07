@@ -1,0 +1,28 @@
+services:
+  backups-app-server:
+    image: backups-app-server:latest
+    build:
+      context: ../..
+      dockerfile: apps/server/Dockerfile
+    container_name: backups-app-server
+    restart: unless-stopped
+    ports:
+      - "8443:8443"
+    environment:
+      - BACKUPS_HOST=0.0.0.0
+      - BACKUPS_PORT=8443
+      - BACKUPS_TLS=true
+      - BACKUPS_DATA_DIR=/data
+      - BACKUPS_JWT_SECRET=${BACKUPS_JWT_SECRET:-}
+      - BACKUPS_ADMIN_USER=${BACKUPS_ADMIN_USER:-}
+      - BACKUPS_ADMIN_PASSWORD=${BACKUPS_ADMIN_PASSWORD:-}
+      - BACKUPS_PUBLIC_URL=${BACKUPS_PUBLIC_URL:-}
+    volumes:
+      - backups-data:/data
+      # Раскомментируйте, чтобы дать клиенту read-only доступ к папкам VPS
+      # для режима "external project" (зеркало папки на хосте). Можно
+      # сузить путь — например, `- /var/www:/host/var/www:ro`.
+      # - /:/host:ro
+
+volumes:
+  backups-data:

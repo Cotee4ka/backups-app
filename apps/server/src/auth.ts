@@ -51,6 +51,21 @@ export function createUser(
   return { id, username, role };
 }
 
+export function upsertBootstrapUser(
+  username: string,
+  passwordHash: string,
+  role: UserRole = 'owner',
+): AuthUser {
+  const existing = getUserByUsername(username);
+  if (existing) {
+    getDb()
+      .prepare(`UPDATE users SET password_hash = ?, role = ? WHERE id = ?`)
+      .run(passwordHash, role, existing.id);
+    return { id: existing.id, username: existing.username, role };
+  }
+  return createUser(username, passwordHash, role);
+}
+
 export function getUserByUsername(username: string): (AuthUser & { passwordHash: string }) | null {
   const db = getDb();
   const row = db

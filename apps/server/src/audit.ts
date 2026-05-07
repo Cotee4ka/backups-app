@@ -1,6 +1,5 @@
-import { nanoid } from 'nanoid';
 import type { AuditEntry } from '@backups-app/shared';
-import type { DbContext } from './db.js';
+import type Database from 'better-sqlite3';
 
 export interface LogAuditInput {
   projectId: string | null;
@@ -10,37 +9,29 @@ export interface LogAuditInput {
   details?: Record<string, unknown>;
 }
 
-export function logAudit(db: DbContext, input: LogAuditInput): AuditEntry {
-  const id = nanoid(16);
-  const timestamp = new Date().toISOString();
-  db.raw
+export function logAudit(db: Database.Database, input: LogAuditInput): AuditEntry {
+  const timestamp = Date.now();
+  const detail = input.details ?? {};
+  if (input.sha) detail.sha = input.sha;
+  const result = db
     .prepare(
-      `INSERT INTO audit_log (id, project_id, user_id, action, sha, details, timestamp)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO audit_log (timestamp, user_id, project_id, action, detail)
+       VALUES (?, ?, ?, ?, ?)`,
     )
-    .run(
-      id,
-      input.projectId,
-      input.userId,
-      input.action,
-      input.sha ?? null,
-      input.details ? JSON.stringify(input.details) : null,
-      timestamp,
-    );
+    .run(timestamp, input.userId, input.projectId, input.action, JSON.stringify(detail));
 
   // Hydrate username for return.
-  const row = db.raw
+  const row = db
     .prepare(`SELECT username FROM users WHERE id = ?`)
     .get(input.userId) as { username: string } | undefined;
 
   return {
-    id,
+    id: Number(result.lastInsertRowid),
     projectId: input.projectId ?? '',
     userId: input.userId,
     username: row?.username ?? 'unknown',
     action: input.action,
-    sha: input.sha,
-    details: input.details,
+    detail,
     timestamp,
   };
 }
@@ -52,7 +43,7 @@ export interface ListAuditFilters {
   before?: string;
 }
 
-export function listAudit(db: DbContext, filters: ListAuditFilters): {
+export function listAudit(db: Database.Database, filters: ListAuditFilters): {
   entries: AuditEntry[];
   hasMore: boolean;
 } {
@@ -72,31 +63,29 @@ export function listAudit(db: DbContext, filters: ListAuditFilters): {
     params.push(filters.before);
   }
   const sql = `
-    SELECT a.id, a.project_id, a.user_id, u.username, a.action, a.sha, a.details, a.timestamp
+    SELECT a.id, a.project_id, a.user_id, u.username, a.action, a.detail, a.timestamp
     FROM audit_log a JOIN users u ON u.id = a.user_id
     ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
     ORDER BY a.timestamp DESC
     LIMIT ?
   `;
-  const rows = db.raw.prepare(sql).all(...params, limit + 1) as Array<{
-    id: string;
+  const rows = db.prepare(sql).all(...params, limit + 1) as Array<{
+    id: number;
     project_id: string | null;
     user_id: string;
     username: string;
     action: AuditEntry['action'];
-    sha: string | null;
-    details: string | null;
-    timestamp: string;
+    detail: string | null;
+    timestamp: number;
   }>;
   const hasMore = rows.length > limit;
-  const entries = rows.slice(0, limit).map((row) => ({
+  const entries: AuditEntry[] = rows.slice(0, limit).map((row) => ({
     id: row.id,
     projectId: row.project_id ?? '',
     userId: row.user_id,
     username: row.username,
     action: row.action,
-    sha: row.sha ?? undefined,
-    details: row.details ? (JSON.parse(row.details) as Record<string, unknown>) : undefined,
+    detail: row.detail ? (JSON.parse(row.detail) as Record<string, unknown>) : {},
     timestamp: row.timestamp,
   }));
   return { entries, hasMore };
