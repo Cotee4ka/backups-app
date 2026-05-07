@@ -8,7 +8,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Dialog } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
 import { useAppStore } from '@/store/app-store';
-import { Cloud, Plus, Server, Trash2, FolderGit2, ShieldCheck, Copy, ChevronRight, HardDrive, ChevronUp, Folder, FileText, Loader2 } from 'lucide-react';
+import { Cloud, Plus, Server, Trash2, FolderGit2, ShieldCheck, Copy, ChevronRight, HardDrive, ChevronUp, Folder, FileText, Loader2, Pencil, Check, X } from 'lucide-react';
 import { copyToClipboard, formatRelativeTime } from '@/lib/utils';
 
 interface ProjectRow {
@@ -41,6 +41,9 @@ export const ServerPage = () => {
   const [projects, setProjects] = React.useState<ProjectRow[]>([]);
   const [loading, setLoading] = React.useState(false);
 
+  const upsertServer = useAppStore((s) => s.upsertServer);
+  const [renaming, setRenaming] = React.useState(false);
+  const [renameVal, setRenameVal] = React.useState('');
   const [createOpen, setCreateOpen] = React.useState(false);
   const [newName, setNewName] = React.useState('');
   const [newDesc, setNewDesc] = React.useState('');
@@ -133,6 +136,19 @@ export const ServerPage = () => {
     }
   }
 
+  async function saveRename() {
+    const name = renameVal.trim();
+    if (!name || !server) return;
+    try {
+      const updated = (await window.backupsApp.servers.rename(server.id, name)) as typeof server;
+      upsertServer(updated);
+    } catch (e) {
+      addToast({ type: 'error', text: (e as Error).message });
+    } finally {
+      setRenaming(false);
+    }
+  }
+
   async function deleteServer() {
     if (!server) return;
     if (!confirm(`Удалить ${server.name} из приложения? Сами данные на VPS не удаляются.`))
@@ -158,11 +174,37 @@ export const ServerPage = () => {
     <div className="mx-auto max-w-6xl space-y-6 px-8 py-10">
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex items-center gap-4">
-          <div className="grid h-14 w-14 place-items-center rounded-2xl bg-gradient-to-br from-blue-500/20 via-violet-500/20 to-fuchsia-500/20">
-            <Server className="h-7 w-7 text-violet-300" />
+          <div className="accent-bg grid h-14 w-14 place-items-center rounded-2xl">
+            <Server className="accent-fg h-7 w-7" />
           </div>
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight">{server.name}</h1>
+            {renaming ? (
+              <div className="flex items-center gap-2">
+                <input
+                  autoFocus
+                  className="rounded-md border border-input bg-background px-2 py-1 text-xl font-semibold tracking-tight focus:outline-none focus:ring-1 focus:ring-ring"
+                  value={renameVal}
+                  onChange={(e) => setRenameVal(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void saveRename();
+                    if (e.key === 'Escape') setRenaming(false);
+                  }}
+                />
+                <button onClick={() => void saveRename()} className="rounded p-1 hover:bg-accent"><Check className="h-4 w-4 text-emerald-400" /></button>
+                <button onClick={() => setRenaming(false)} className="rounded p-1 hover:bg-accent"><X className="h-4 w-4 text-muted-foreground" /></button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <h1 className="text-2xl font-semibold tracking-tight">{server.name}</h1>
+                <button
+                  className="rounded p-1 text-muted-foreground opacity-0 hover:bg-accent hover:text-foreground hover:opacity-100 group-hover:opacity-60"
+                  title="Переименовать"
+                  onClick={() => { setRenameVal(server.name); setRenaming(true); }}
+                >
+                  <Pencil className="h-4 w-4" />
+                </button>
+              </div>
+            )}
             <p className="text-sm text-muted-foreground">{server.url}</p>
           </div>
         </div>
@@ -178,7 +220,7 @@ export const ServerPage = () => {
 
       <div className="grid gap-4 md:grid-cols-3">
         <InfoTile
-          icon={<Cloud className="h-4 w-4 text-blue-300" />}
+          icon={<Cloud className="accent-fg h-4 w-4" />}
           label="Адрес"
           value={new URL(server.url).hostname}
         />
@@ -189,7 +231,7 @@ export const ServerPage = () => {
           mono
         />
         <InfoTile
-          icon={<FolderGit2 className="h-4 w-4 text-violet-300" />}
+          icon={<FolderGit2 className="accent-fg h-4 w-4" />}
           label="Синхронизировано папок"
           value={String(server.syncedFolders.length)}
         />
@@ -230,9 +272,9 @@ export const ServerPage = () => {
                   >
                     <div className="grid h-10 w-10 place-items-center rounded-lg bg-muted/40">
                       {p.externalPath ? (
-                        <HardDrive className="h-5 w-5 text-blue-300" />
+                        <HardDrive className="accent-fg h-5 w-5" />
                       ) : (
-                        <FolderGit2 className="h-5 w-5 text-violet-300" />
+                        <FolderGit2 className="accent-fg h-5 w-5" />
                       )}
                     </div>
                     <div className="min-w-0 flex-1">
@@ -383,7 +425,7 @@ export const ServerPage = () => {
                     disabled={e.type !== 'dir'}
                   >
                     {e.type === 'dir' ? (
-                      <Folder className="h-4 w-4 text-blue-300 shrink-0" />
+                      <Folder className="accent-fg h-4 w-4 shrink-0" />
                     ) : (
                       <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
                     )}

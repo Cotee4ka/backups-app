@@ -41,11 +41,11 @@ export const LoginPage = () => {
   return (
     <div className="flex min-h-screen items-center justify-center px-4">
       <div className="relative w-full max-w-md">
-        <div className="pointer-events-none absolute -inset-32 -z-10 rounded-full bg-gradient-to-br from-blue-500/20 via-violet-500/10 to-fuchsia-500/10 blur-3xl" />
+        <div className="accent-bg pointer-events-none absolute -inset-32 -z-10 rounded-full blur-3xl" />
 
         <div className="rounded-2xl border border-border bg-card/70 p-8 shadow-2xl backdrop-blur-xl">
           <div className="mb-6 flex flex-col items-center gap-3 text-center">
-            <div className="grid h-12 w-12 place-items-center rounded-xl bg-gradient-to-br from-blue-500 via-violet-500 to-fuchsia-500 text-white shadow-lg shadow-violet-500/30">
+            <div className="accent-icon grid h-12 w-12 place-items-center rounded-xl text-white" style={{ boxShadow: 'var(--accent-shadow)' }}>
               <Lock className="h-5 w-5" />
             </div>
             <div>

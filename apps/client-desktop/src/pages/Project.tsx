@@ -190,8 +190,8 @@ export const ProjectPage = () => {
     <div className="mx-auto max-w-6xl space-y-6 px-8 py-10">
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex items-center gap-4">
-          <div className="grid h-14 w-14 place-items-center rounded-2xl bg-gradient-to-br from-blue-500/20 via-violet-500/20 to-fuchsia-500/20">
-            <FolderGit2 className="h-7 w-7 text-violet-300" />
+          <div className="accent-bg grid h-14 w-14 place-items-center rounded-2xl">
+            <FolderGit2 className="accent-fg h-7 w-7" />
           </div>
           <div>
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -607,7 +607,7 @@ function TransferProgressDialog({
           ) : isDone ? (
             <CheckCircle2 className="h-6 w-6 text-emerald-400" />
           ) : (
-            <Loader2 className="h-6 w-6 animate-spin text-violet-300" />
+            <Loader2 className="accent-fg h-6 w-6 animate-spin" />
           )}
           <div>
             <div className="text-base font-semibold">
@@ -627,7 +627,7 @@ function TransferProgressDialog({
                 ? 'bg-destructive'
                 : isDone
                   ? 'bg-emerald-400'
-                  : 'bg-gradient-to-r from-violet-500 via-fuchsia-500 to-blue-500')
+                  : 'accent-btn')
             }
             style={{ width: isDone ? '100%' : `${pct}%` }}
           />
@@ -949,9 +949,9 @@ function FileBrowser({
                     >
                       <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-muted/40">
                         {entry.type === 'dir' ? (
-                          <Folder className="h-5 w-5 text-violet-300" />
+                          <Folder className="accent-fg h-5 w-5" />
                         ) : (
-                          <FileText className="h-5 w-5 text-blue-300" />
+                          <FileText className="accent-fg h-5 w-5 opacity-60" />
                         )}
                       </span>
                       <span className="min-w-0">

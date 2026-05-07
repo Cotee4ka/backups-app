@@ -163,14 +163,14 @@ export const SettingsPage = () => {
         </CardHeader>
         <CardContent className="space-y-4">
           <ToggleRow
-            icon={<Power className="h-4 w-4 text-violet-300" />}
+            icon={<Power className="accent-fg h-4 w-4" />}
             title="Запускать вместе с системой"
             description="Открывает приложение при старте Windows или macOS."
             checked={settings.autoLaunch}
             onChange={toggleAutoLaunch}
           />
           <ToggleRow
-            icon={<Power className="h-4 w-4 text-blue-300" />}
+            icon={<Power className="accent-fg h-4 w-4 opacity-70" />}
             title="Стартовать свёрнутым"
             description="Не показывать окно при автозапуске."
             checked={settings.startMinimized}

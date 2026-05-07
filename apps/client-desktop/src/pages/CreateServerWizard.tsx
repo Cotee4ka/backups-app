@@ -176,7 +176,7 @@ export const CreateServerWizard = () => {
                     l.type === 'stderr'
                       ? 'text-amber-300/90'
                       : l.type === 'info'
-                      ? 'text-violet-300'
+                      ? 'accent-fg'
                       : 'text-foreground/90'
                   }
                 >
@@ -208,7 +208,7 @@ export const CreateServerWizard = () => {
           <CardContent className="space-y-4">
             <Field
               label="Адрес сервера"
-              icon={<Server className="h-4 w-4 text-violet-300" />}
+              icon={<Server className="accent-fg h-4 w-4" />}
               value={result.server.url}
             />
             <Field
@@ -219,7 +219,7 @@ export const CreateServerWizard = () => {
             />
             <Field
               label="Логин владельца"
-              icon={<Cloud className="h-4 w-4 text-blue-300" />}
+              icon={<Cloud className="accent-fg h-4 w-4" />}
               value={result.adminUsername}
             />
             <Field
@@ -259,14 +259,14 @@ const Stepper = ({ step }: { step: Step }) => {
             className={
               'flex items-center gap-2 rounded-md px-3 py-1.5 ' +
               (i <= activeIdx
-                ? 'bg-gradient-to-br from-blue-500/20 via-violet-500/20 to-fuchsia-500/20 text-foreground'
+                ? 'accent-bg text-foreground'
                 : 'border border-border text-muted-foreground')
             }
           >
             <span
               className={
                 'grid h-5 w-5 place-items-center rounded-full text-[10px] ' +
-                (i <= activeIdx ? 'bg-violet-500 text-white' : 'bg-muted text-muted-foreground')
+                (i <= activeIdx ? 'accent-icon text-white' : 'bg-muted text-muted-foreground')
               }
             >
               {i + 1}
