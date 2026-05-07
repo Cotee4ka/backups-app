@@ -17,6 +17,7 @@ import { auditRoutes } from './routes/audit.js';
 import { inviteRoutes } from './routes/invites.js';
 import { gitHttpRoutes } from './git/http.js';
 import { countUsers, hashPassword, upsertBootstrapUser } from './auth.js';
+import { SERVER_VERSION, SERVER_FEATURES } from './version.js';
 
 async function bootstrap() {
   fs.mkdirSync(config.dataDir, { recursive: true });
@@ -52,7 +53,8 @@ async function bootstrap() {
 
   app.get('/api/health', async () => ({
     ok: true,
-    version: '0.1.0',
+    version: SERVER_VERSION,
+    features: SERVER_FEATURES,
     fingerprint: tls?.fingerprint ?? null,
   }));
 
@@ -61,12 +63,18 @@ async function bootstrap() {
     let fp = tls?.fingerprint ?? null;
     if (!fp && fs.existsSync(fpPath)) fp = fs.readFileSync(fpPath, 'utf8').trim();
     return {
-      version: '0.1.0',
+      version: SERVER_VERSION,
+      features: SERVER_FEATURES,
       tls: !!tls,
       fingerprint: fp,
       requireInvite: countUsers() > 0,
     };
   });
+
+  app.get('/api/version', async () => ({
+    version: SERVER_VERSION,
+    features: SERVER_FEATURES,
+  }));
 
   await app.register(async (api) => {
     await authRoutes(api);

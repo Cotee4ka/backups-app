@@ -65,6 +65,27 @@ export interface SyncResult {
   durationMs: number;
 }
 
+export interface HeavyCandidate {
+  relPath: string;
+  size: number;
+  mtime: number;
+}
+
+/**
+ * Возвращает список файлов проекта, которые попадают под heavy-паттерны.
+ * Используется в визарде "уточни тяжёлые файлы" перед первой синхронизацией.
+ */
+export async function listHeavyCandidates(
+  serverId: string,
+  projectId: string,
+): Promise<HeavyCandidate[]> {
+  const api = new ApiClient(serverId);
+  const tree = await api.treeRecursive(projectId, '');
+  return tree.entries
+    .filter((e) => isHeavyPath(e.relPath))
+    .sort((a, b) => b.size - a.size);
+}
+
 /**
  * Скачивает все файлы из external project в локальную папку. Сравнивает
  * mtime+size — если совпадает с локальным, пропускает. Опционально удаляет

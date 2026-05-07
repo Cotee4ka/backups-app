@@ -249,6 +249,42 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   );
 
   ipcMain.handle(
+    'externalSync:listHeavy',
+    async (_e, { serverId, projectId }: { serverId: string; projectId: string }) => {
+      const { listHeavyCandidates } = await import('./external-sync');
+      return listHeavyCandidates(serverId, projectId);
+    },
+  );
+
+  ipcMain.handle(
+    'externalSync:detectDataStore',
+    async (_e, { serverId, projectId }: { serverId: string; projectId: string }) => {
+      // Серверная автодетекция (есть только в server >= 0.2.0).
+      // На старом сервере (404) возвращаем null — клиент сам сделает фоллбэк
+      // на listHeavy (клиентский регексп без размеров и причин).
+      try {
+        return await new ApiClient(serverId).detectDataStore(projectId);
+      } catch (e) {
+        const msg = (e as Error).message ?? '';
+        if (msg.includes('HTTP 404')) return null;
+        throw e;
+      }
+    },
+  );
+
+  ipcMain.handle(
+    'servers:checkVersion',
+    async (_e, { serverId }: { serverId: string }) => {
+      try {
+        const v = await new ApiClient(serverId).getServerVersion();
+        return v;
+      } catch (e) {
+        return { version: '0.0.0', features: [], error: (e as Error).message };
+      }
+    },
+  );
+
+  ipcMain.handle(
     'externalSync:setRules',
     async (
       _e,
