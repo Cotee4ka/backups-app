@@ -111,6 +111,18 @@ services:
       - backups-data:/data
 $HOST_MOUNT_LINE
 
+  watchtower:
+    image: containrrr/watchtower
+    container_name: backups-watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - WATCHTOWER_POLL_INTERVAL=3600
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_INCLUDE_STOPPED=false
+    command: backups-app-server
+
 volumes:
   backups-data:
 EOF
