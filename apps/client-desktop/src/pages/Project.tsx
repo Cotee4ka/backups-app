@@ -797,6 +797,14 @@ function FileBrowser({
   const [serverHeavyPaths, setServerHeavyPaths] = React.useState<Set<string>>(new Set());
   /** Множество junk-директорий (node_modules, .git, dist, …) от сервера. */
   const [serverJunkDirs, setServerJunkDirs] = React.useState<Set<string>>(new Set());
+  /** Все файлы проекта (для file-picker внутри визарда + расчёта зелёных папок). */
+  const [allProjectFiles, setAllProjectFiles] = React.useState<
+    Array<{ relPath: string; size: number; mtime: number }>
+  >([]);
+  /** Глобальные sync-статусы (по всем файлам, рекурсивно) — для пометок папок. */
+  const [globalStatuses, setGlobalStatuses] = React.useState<Map<string, FileSyncStatus>>(
+    new Map(),
+  );
   const [syncProgress, setSyncProgress] = React.useState<null | {
     phase: string;
     totalFiles?: number;
@@ -819,6 +827,11 @@ function FileBrowser({
   const [heavySortKey, setHeavySortKey] = React.useState<'name' | 'size' | 'mtime'>('size');
   const [heavySortAsc, setHeavySortAsc] = React.useState(false);
   const [heavyAddPath, setHeavyAddPath] = React.useState('');
+  // Slide-панель «выбрать файл из дерева»
+  const [pickerOpen, setPickerOpen] = React.useState(false);
+  const [pickerSearch, setPickerSearch] = React.useState('');
+  const [pickerSort, setPickerSort] = React.useState<'name' | 'size' | 'mtime'>('mtime');
+  const [pickerAsc, setPickerAsc] = React.useState(false);
   type SortKey = 'name' | 'size' | 'mtime' | 'author';
   const [sortKey, setSortKey] = React.useState<SortKey>('name');
   const [sortAsc, setSortAsc] = React.useState(true);
@@ -925,6 +938,34 @@ function FileBrowser({
       .catch(() => {
         /* старый сервер — fallback на клиентский regex остаётся */
       });
+
+    // Грузим список ВСЕХ файлов проекта рекурсивно — нужен для двух вещей:
+    // 1) file-picker внутри визарда (выбрать любой файл и пометить как
+    //    хранилище);
+    // 2) расчёт «вся папка синхронизирована» для зелёного маркера на папках.
+    void (async () => {
+      try {
+        const files = (await window.backupsApp.externalSync.listAllFiles(
+          serverId,
+          projectId,
+        )) as Array<{ relPath: string; size: number; mtime: number }>;
+        setAllProjectFiles(files);
+        if (files.length > 0) {
+          const statuses = (await window.backupsApp.externalSync.fileStatuses(
+            serverId,
+            projectId,
+            files,
+          )) as Array<{ relPath: string; status: FileSyncStatus }>;
+          const map = new Map<string, FileSyncStatus>();
+          for (const s of statuses) map.set(s.relPath, s.status);
+          setGlobalStatuses(map);
+        } else {
+          setGlobalStatuses(new Map());
+        }
+      } catch {
+        /* старый сервер без /tree-recursive — оставляем пустые */
+      }
+    })();
   }, [isExternal, serverId, projectId]);
 
   React.useEffect(() => {
@@ -1449,6 +1490,27 @@ function FileBrowser({
                 {sorted.map((entry) => {
                   const status =
                     entry.type === 'file' ? fileStatuses.get(entry.path) : undefined;
+                  // Зелёный маркер на папке: все её файлы (рекурсивно)
+                  // синхронизированы. Игнорируем heavy и excluded — их быть не
+                  // обязано локально, чтобы папка считалась «в порядке».
+                  let folderAllSynced = false;
+                  if (entry.type === 'dir' && globalStatuses.size > 0) {
+                    const prefix = entry.path + '/';
+                    let any = false;
+                    let allOk = true;
+                    for (const [p, st] of globalStatuses) {
+                      if (!p.startsWith(prefix)) continue;
+                      if (serverHeavyPaths.has(p)) continue;
+                      if (matchesRule(p, extSync?.excludedPaths)) continue;
+                      if (matchesRule(p, extSync?.manualHeavyPaths)) continue;
+                      any = true;
+                      if (st !== 'synced') {
+                        allOk = false;
+                        break;
+                      }
+                    }
+                    folderAllSynced = any && allOk;
+                  }
                   const inExcluded = matchesRule(entry.path, extSync?.excludedPaths);
                   const inManualHeavy = matchesRule(entry.path, extSync?.manualHeavyPaths);
                   const inManualOverride = matchesRule(entry.path, extSync?.manualPaths);
@@ -1497,23 +1559,30 @@ function FileBrowser({
                         ) : (
                           <FileText className="accent-fg h-5 w-5 opacity-60" />
                         )}
-                        {/* Неоновый значок статуса синхронизации в углу */}
+                        {/* Неоновая «скрепка» — мелкая полоска в углу иконки. */}
                         {status === 'synced' && (
                           <span
-                            title="Скачан и совпадает с продой"
-                            className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-emerald-400 ring-2 ring-card shadow-[0_0_8px_rgba(74,222,128,0.95)]"
+                            title="Совпадает с продой"
+                            className="absolute bottom-0.5 right-0.5 h-2 w-0.5 rounded-full bg-emerald-400/70 shadow-[0_0_3px_rgba(74,222,128,0.9)]"
                           />
                         )}
                         {status === 'modified' && (
                           <span
-                            title="Локальная копия отличается от прод-версии"
-                            className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-amber-400 ring-2 ring-card shadow-[0_0_8px_rgba(251,191,36,0.85)]"
+                            title="Изменён локально"
+                            className="absolute bottom-0.5 right-0.5 h-2 w-0.5 rounded-full bg-amber-400/70 shadow-[0_0_3px_rgba(251,191,36,0.85)]"
                           />
                         )}
                         {status === 'missing' && (
                           <span
                             title="Не скачано на ПК"
-                            className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-muted-foreground/40 ring-2 ring-card"
+                            className="absolute bottom-0.5 right-0.5 h-2 w-0.5 rounded-full bg-slate-400/30"
+                          />
+                        )}
+                        {/* Папка: все её файлы синхронизированы (без БД и excluded). */}
+                        {entry.type === 'dir' && folderAllSynced && (
+                          <span
+                            title="Все файлы папки скачаны и совпадают с продой"
+                            className="absolute bottom-0.5 right-0.5 h-2 w-0.5 rounded-full bg-emerald-400/70 shadow-[0_0_3px_rgba(74,222,128,0.9)]"
                           />
                         )}
                       </span>
@@ -1809,6 +1878,12 @@ function FileBrowser({
       title="Хранилище данных — подтверди и скачай"
       description="Сервер прошёлся по дереву файлов и нашёл то, что похоже на хранилище данных, плюс мусорные папки (node_modules, .git, dist…). Поправь, если что-то определилось не так."
     >
+      <div className="overflow-hidden">
+      <div
+        className="flex transition-transform duration-300 ease-out"
+        style={{ transform: pickerOpen ? 'translateX(-50%)' : 'translateX(0)' }}
+      >
+      <div className="w-full shrink-0 pr-2">
       <div className="space-y-4 text-sm">
         {heavyLoading ? (
           <div className="py-8 text-center text-muted-foreground">Сервер сканирует папку проекта…</div>
@@ -1891,10 +1966,6 @@ function FileBrowser({
               </div>
             ) : null}
             <div className="rounded-lg border border-border bg-muted/10 p-3">
-              <div className="mb-2 flex items-center gap-2 text-xs font-medium">
-                <Plus className="h-3.5 w-3.5 accent-fg" />
-                Добавить путь вручную
-              </div>
               <div className="flex flex-wrap items-center gap-2">
                 <input
                   type="text"
@@ -1912,12 +1983,20 @@ function FileBrowser({
                   onClick={() => addHeavyByPath(heavyAddPath)}
                   disabled={!heavyAddPath.trim()}
                 >
-                  <Plus className="h-3.5 w-3.5" /> Добавить
+                  <Plus className="h-3.5 w-3.5" /> По пути
+                </Button>
+                <Button
+                  size="sm"
+                  variant="gradient"
+                  onClick={() => setPickerOpen(true)}
+                  disabled={allProjectFiles.length === 0}
+                  title="Выдвинуть панель со списком всех файлов проекта"
+                >
+                  <FileText className="h-3.5 w-3.5" /> Выбрать из дерева →
                 </Button>
               </div>
               <div className="mt-1 text-[11px] text-muted-foreground">
-                Можно указать файл (`var/log/app.log`) или папку (`var/log`) — относительно
-                корня проекта на проде. Папка пометит всё содержимое.
+                Можно ввести путь руками или открыть выдвижной список всех файлов проекта.
               </div>
             </div>
 
@@ -2088,6 +2167,158 @@ function FileBrowser({
           )}
         </div>
       </div>
+      </div>{/* end left wizard pane */}
+
+      <div className="w-full shrink-0 pl-2">
+        <div className="space-y-3 text-sm">
+          {/* Header с кнопкой назад */}
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setPickerOpen(false)}
+              title="Назад к визарду"
+            >
+              <ChevronLeft className="h-4 w-4" /> Назад
+            </Button>
+            <span className="text-base font-semibold">Файлы проекта</span>
+            <Badge variant="secondary">{allProjectFiles.length}</Badge>
+          </div>
+
+          {/* Search + sort */}
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex flex-1 min-w-[180px] items-center gap-2 rounded-md border border-border bg-background/40 px-2 py-1">
+              <Search className="h-3.5 w-3.5 text-muted-foreground" />
+              <input
+                type="text"
+                placeholder="Поиск по пути…"
+                value={pickerSearch}
+                onChange={(e) => setPickerSearch(e.target.value)}
+                className="min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground"
+              />
+              {pickerSearch && (
+                <button
+                  onClick={() => setPickerSearch('')}
+                  className="text-muted-foreground hover:text-foreground"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              )}
+            </div>
+            <div className="flex items-center gap-1 text-xs text-muted-foreground">
+              <span>Сорт:</span>
+              {(['mtime', 'size', 'name'] as const).map((k) => {
+                const active = pickerSort === k;
+                const labels: Record<typeof k, string> = {
+                  size: 'размер',
+                  mtime: 'дата',
+                  name: 'имя',
+                };
+                return (
+                  <button
+                    key={k}
+                    onClick={() => {
+                      if (active) setPickerAsc((v) => !v);
+                      else {
+                        setPickerSort(k);
+                        setPickerAsc(k === 'name');
+                      }
+                    }}
+                    className={
+                      'inline-flex items-center gap-1 rounded px-1.5 py-0.5 transition ' +
+                      (active
+                        ? 'bg-card text-foreground'
+                        : 'hover:bg-card hover:text-foreground')
+                    }
+                  >
+                    {labels[k]}
+                    {active && (pickerAsc ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />)}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Список */}
+          <div className="max-h-[55vh] space-y-0.5 overflow-y-auto rounded-md border border-border bg-muted/10 p-2">
+            {(() => {
+              const q = pickerSearch.trim().toLowerCase();
+              const filtered = q
+                ? allProjectFiles.filter((f) => f.relPath.toLowerCase().includes(q))
+                : allProjectFiles;
+              const sorted = [...filtered].sort((a, b) => {
+                let v = 0;
+                if (pickerSort === 'name') v = a.relPath.localeCompare(b.relPath);
+                else if (pickerSort === 'size') v = a.size - b.size;
+                else if (pickerSort === 'mtime') v = a.mtime - b.mtime;
+                return pickerAsc ? v : -v;
+              });
+              if (sorted.length === 0) {
+                return (
+                  <div className="py-4 text-center text-xs text-muted-foreground">
+                    {allProjectFiles.length === 0
+                      ? 'Список пуст. Серверная часть не отвечает или проект пустой.'
+                      : `Ничего не найдено по «${pickerSearch}»`}
+                  </div>
+                );
+              }
+              return sorted.slice(0, 500).map((f) => {
+                const alreadyAdded = heavyCandidates?.some((c) => c.relPath === f.relPath);
+                const localStatus = globalStatuses.get(f.relPath);
+                return (
+                  <div
+                    key={f.relPath}
+                    className="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-card/60"
+                  >
+                    <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate font-mono text-xs" title={f.relPath}>
+                        {f.relPath}
+                      </div>
+                      <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+                        <span>{formatBytes(f.size)}</span>
+                        <span>·</span>
+                        <span>{formatRelativeTime(f.mtime)}</span>
+                        {localStatus === 'synced' && (
+                          <span className="text-emerald-400/80">●</span>
+                        )}
+                        {localStatus === 'modified' && (
+                          <span className="text-amber-400/80">●</span>
+                        )}
+                      </div>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant={alreadyAdded ? 'ghost' : 'outline'}
+                      disabled={alreadyAdded}
+                      onClick={() => addHeavyByPath(f.relPath)}
+                      title={alreadyAdded ? 'Уже в списке' : 'Добавить в хранилище'}
+                    >
+                      {alreadyAdded ? (
+                        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
+                      ) : (
+                        <Plus className="h-3.5 w-3.5" />
+                      )}
+                    </Button>
+                  </div>
+                );
+              });
+            })()}
+          </div>
+
+          <div className="flex justify-between text-[11px] text-muted-foreground">
+            <span>Тыкни «+» рядом с файлом, чтобы пометить его как хранилище данных.</span>
+            <button
+              onClick={() => setPickerOpen(false)}
+              className="accent-fg underline-offset-2 hover:underline"
+            >
+              готово
+            </button>
+          </div>
+        </div>
+      </div>{/* end right picker pane */}
+      </div>{/* end flex slide */}
+      </div>{/* end overflow-hidden */}
     </Dialog>
     </>
   );
