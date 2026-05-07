@@ -288,6 +288,7 @@ export const ProjectPage = () => {
           projectId={projectId}
           projectName={project?.name ?? ''}
           syncedFolder={synced?.localPath ?? null}
+          isExternal={isExternal}
         />
       )}
 
@@ -692,6 +693,7 @@ interface TreeEntry {
   path: string;
   type: 'file' | 'dir';
   size: number | null;
+  mtime?: number;
   lastCommit?: {
     sha: string;
     shortSha: string;
@@ -717,11 +719,13 @@ function FileBrowser({
   projectId,
   projectName,
   syncedFolder,
+  isExternal,
 }: {
   serverId: string;
   projectId: string;
   projectName: string;
   syncedFolder: string | null;
+  isExternal: boolean;
 }) {
   const addToast = useAppStore((s) => s.addToast);
   const [pathInRepo, setPathInRepo] = React.useState('');
@@ -878,18 +882,30 @@ function FileBrowser({
             </div>
           ) : (
             <div className="overflow-hidden rounded-xl border border-border">
-              <div className="grid grid-cols-[minmax(0,1fr)_150px_140px_120px] gap-3 border-b border-border bg-muted/20 px-4 py-2 text-xs uppercase tracking-wider text-muted-foreground">
-                <span>Имя</span>
-                <span>Изменил</span>
-                <span>Когда</span>
-                <span className="text-right">Действия</span>
-              </div>
+              {isExternal ? (
+                <div className="grid grid-cols-[minmax(0,1fr)_100px_160px_100px] gap-3 border-b border-border bg-muted/20 px-4 py-2 text-xs uppercase tracking-wider text-muted-foreground">
+                  <span>Имя</span>
+                  <span>Размер</span>
+                  <span>Изменён</span>
+                  <span className="text-right">Действия</span>
+                </div>
+              ) : (
+                <div className="grid grid-cols-[minmax(0,1fr)_150px_140px_120px] gap-3 border-b border-border bg-muted/20 px-4 py-2 text-xs uppercase tracking-wider text-muted-foreground">
+                  <span>Имя</span>
+                  <span>Изменил</span>
+                  <span>Когда</span>
+                  <span className="text-right">Действия</span>
+                </div>
+              )}
               <ul className="divide-y divide-border">
                 {entries.map((entry) => (
                   <li
                     key={entry.path}
                     className={
-                      'grid grid-cols-[minmax(0,1fr)_150px_140px_120px] items-center gap-3 px-4 py-3 text-sm transition hover:bg-accent/20 ' +
+                      (isExternal
+                        ? 'grid grid-cols-[minmax(0,1fr)_100px_160px_100px]'
+                        : 'grid grid-cols-[minmax(0,1fr)_150px_140px_120px]') +
+                      ' items-center gap-3 px-4 py-3 text-sm transition hover:bg-accent/20 ' +
                       (selected?.path === entry.path ? 'bg-accent/25' : '')
                     }
                   >
@@ -908,23 +924,42 @@ function FileBrowser({
                       </span>
                       <span className="min-w-0">
                         <span className="block truncate font-medium">{entry.name}</span>
-                        <span className="block truncate text-xs text-muted-foreground">
-                          {entry.type === 'dir' ? 'папка' : formatBytes(entry.size ?? 0)}
-                        </span>
+                        {!isExternal && (
+                          <span className="block truncate text-xs text-muted-foreground">
+                            {entry.type === 'dir' ? 'папка' : formatBytes(entry.size ?? 0)}
+                          </span>
+                        )}
                       </span>
                     </button>
-                    <span className="truncate text-xs text-muted-foreground">
-                      {entry.lastCommit?.authorName ?? '—'}
-                    </span>
-                    <span className="truncate text-xs text-muted-foreground">
-                      {entry.lastCommit ? formatRelativeTime(entry.lastCommit.timestamp) : '—'}
-                    </span>
+
+                    {isExternal ? (
+                      <>
+                        <span className="truncate text-xs text-muted-foreground">
+                          {entry.type === 'file' ? formatBytes(entry.size ?? 0) : '—'}
+                        </span>
+                        <span className="truncate text-xs text-muted-foreground">
+                          {entry.mtime ? formatRelativeTime(entry.mtime) : '—'}
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="truncate text-xs text-muted-foreground">
+                          {entry.lastCommit?.authorName ?? '—'}
+                        </span>
+                        <span className="truncate text-xs text-muted-foreground">
+                          {entry.lastCommit ? formatRelativeTime(entry.lastCommit.timestamp) : '—'}
+                        </span>
+                      </>
+                    )}
+
                     <div className="flex justify-end gap-1">
                       {entry.type === 'file' ? (
                         <>
-                          <Button variant="ghost" size="sm" title="История файла" onClick={() => selectFile(entry)}>
-                            <History className="h-4 w-4" />
-                          </Button>
+                          {!isExternal && (
+                            <Button variant="ghost" size="sm" title="История файла" onClick={() => selectFile(entry)}>
+                              <History className="h-4 w-4" />
+                            </Button>
+                          )}
                           <Button variant="ghost" size="sm" title="Открыть файл" onClick={() => openFile(entry)}>
                             <ExternalLink className="h-4 w-4" />
                           </Button>

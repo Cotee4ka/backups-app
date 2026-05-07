@@ -393,6 +393,7 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
               : e.name,
             type: e.type,
             size: e.size,
+            mtime: e.mtime,
             mode: '',
             oid: '',
           })),
