@@ -25,7 +25,7 @@ import {
   resolveHostPath,
   statExternalFile,
 } from '../host-fs.js';
-import { detectDataStore } from '../data-store-detector.js';
+import { detectDataStore, JUNK_DIR_NAMES } from '../data-store-detector.js';
 
 const createSchema = z.object({
   name: z.string().min(1).max(128),
@@ -415,7 +415,14 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
   app.get('/projects/:id/tree-recursive', async (req, reply) => {
     const me = await requireAuth(req);
     const params = z.object({ id: z.string() }).parse(req.params);
-    const query = z.object({ path: z.string().default('') }).parse(req.query);
+    const query = z
+      .object({
+        path: z.string().default(''),
+        // По умолчанию игнорируем мусорные директории (node_modules, .git,
+        // dist, …). Клиент может явно попросить их через ?includeJunk=1.
+        includeJunk: z.coerce.number().optional(),
+      })
+      .parse(req.query);
 
     const project = getProject(params.id);
     if (!project) return reply.code(404).send({ error: 'Not found' });
@@ -432,8 +439,16 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
     }
 
     try {
-      const result = await listExternalTreeRecursive(project.external_path, query.path);
-      return reply.send({ path: query.path, entries: result.entries, truncated: result.truncated });
+      const pruneDirNames = query.includeJunk ? undefined : JUNK_DIR_NAMES;
+      const result = await listExternalTreeRecursive(project.external_path, query.path, {
+        pruneDirNames,
+      });
+      return reply.send({
+        path: query.path,
+        entries: result.entries,
+        prunedDirs: result.prunedDirs,
+        truncated: result.truncated,
+      });
     } catch (e) {
       if (e instanceof InvalidHostPathError) {
         return reply.code(400).send({ error: e.message });

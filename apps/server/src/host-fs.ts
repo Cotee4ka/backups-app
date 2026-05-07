@@ -131,21 +131,80 @@ export interface ExternalFileEntry {
   mtime: number;
 }
 
+export interface PrunedDirInfo {
+  relPath: string;
+  size: number;
+  fileCount: number;
+}
+
+export interface RecursiveTreeOpts {
+  maxEntries?: number;
+  maxDepth?: number;
+  /**
+   * Имена директорий, в которые НЕ заходим вглубь — например, node_modules,
+   * .git, dist. Их размер и количество файлов всё равно агрегируется
+   * (отдельно, в prunedDirs), чтобы клиент мог честно показать «эта папка
+   * весит N МБ, мы в неё не лезли».
+   */
+  pruneDirNames?: Set<string>;
+}
+
 /**
  * Рекурсивный обход external project. Возвращает плоский список файлов с
  * относительными путями. Жёсткие лимиты — защита от symlink-петель и от
  * случайно подключённой / на VPS.
+ *
+ * Если передан `pruneDirNames`, в эти директории не углубляемся, но их
+ * размер агрегируется и возвращается отдельно — это нужно для детекции
+ * мусорных папок типа node_modules / .git / dist.
  */
 export async function listExternalTreeRecursive(
   externalPath: string,
   subPath: string,
-  opts: { maxEntries?: number; maxDepth?: number } = {},
-): Promise<{ entries: ExternalFileEntry[]; truncated: boolean }> {
+  opts: RecursiveTreeOpts = {},
+): Promise<{
+  entries: ExternalFileEntry[];
+  prunedDirs: PrunedDirInfo[];
+  truncated: boolean;
+}> {
   const maxEntries = opts.maxEntries ?? 200_000;
   const maxDepth = opts.maxDepth ?? 24;
+  const pruneSet = opts.pruneDirNames ?? new Set<string>();
   const root = resolveSubPath(externalPath, subPath);
   const entries: ExternalFileEntry[] = [];
+  const prunedDirs: PrunedDirInfo[] = [];
   let truncated = false;
+
+  /** Агрегирует размер и количество файлов внутри pruned-директории. */
+  async function aggregateDir(absPath: string): Promise<{ size: number; fileCount: number }> {
+    let size = 0;
+    let fileCount = 0;
+    async function walk(p: string, depth: number): Promise<void> {
+      if (depth > maxDepth) return;
+      let dir: import('node:fs').Dirent[];
+      try {
+        dir = await fs.readdir(p, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const e of dir) {
+        const full = path.join(p, e.name);
+        if (e.isFile()) {
+          try {
+            const st = await fs.stat(full);
+            size += st.size;
+            fileCount += 1;
+          } catch {
+            /* skip */
+          }
+        } else if (e.isDirectory()) {
+          await walk(full, depth + 1);
+        }
+      }
+    }
+    await walk(absPath, 0);
+    return { size, fileCount };
+  }
 
   async function walk(absPath: string, relBase: string, depth: number): Promise<void> {
     if (truncated || depth > maxDepth) return;
@@ -171,12 +230,18 @@ export async function listExternalTreeRecursive(
           /* skip */
         }
       } else if (e.isDirectory()) {
+        if (pruneSet.has(e.name)) {
+          // мусорная директория — агрегируем и не идём вглубь
+          const agg = await aggregateDir(full);
+          prunedDirs.push({ relPath: rel, size: agg.size, fileCount: agg.fileCount });
+          continue;
+        }
         await walk(full, rel, depth + 1);
       }
     }
   }
   await walk(root, '', 0);
-  return { entries, truncated };
+  return { entries, prunedDirs, truncated };
 }
 
 export async function externalFileExists(
