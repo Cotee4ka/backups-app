@@ -724,55 +724,6 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     return new ApiClient(serverId).members(projectId);
   });
 
-  // ---------- Project lock (Claude/human coordination) ----------
-  ipcMain.handle(
-    'lock:get',
-    async (_e, { serverId, projectId }: { serverId: string; projectId: string }) => {
-      return new ApiClient(serverId).getProjectLock(projectId);
-    },
-  );
-  ipcMain.handle(
-    'lock:acquire',
-    async (
-      _e,
-      params: {
-        serverId: string;
-        projectId: string;
-        reason?: string;
-        ttlSec?: number;
-        force?: boolean;
-      },
-    ) => {
-      const { serverId, projectId, ...body } = params;
-      return new ApiClient(serverId).acquireProjectLock(projectId, body);
-    },
-  );
-  ipcMain.handle(
-    'lock:heartbeat',
-    async (
-      _e,
-      params: {
-        serverId: string;
-        projectId: string;
-        ttlSec?: number;
-        currentlyEditing?: string[];
-        reason?: string;
-      },
-    ) => {
-      const { serverId, projectId, ...body } = params;
-      return new ApiClient(serverId).heartbeatProjectLock(projectId, body);
-    },
-  );
-  ipcMain.handle(
-    'lock:release',
-    async (
-      _e,
-      params: { serverId: string; projectId: string; summary?: string },
-    ) => {
-      const { serverId, projectId, ...body } = params;
-      return new ApiClient(serverId).releaseProjectLock(projectId, body);
-    },
-  );
   ipcMain.handle('projects:addMember', async (_e, { serverId, projectId, username, role }) => {
     return new ApiClient(serverId).addMember(projectId, username, role);
   });
@@ -896,6 +847,13 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       active: sync.listActive().filter((a) => a.serverId === serverId),
     };
   });
+  ipcMain.handle(
+    'sync:dirtyFiles',
+    async (_e, { serverId, projectId }: { serverId: string; projectId: string }) => {
+      const sync = await ensureSyncEngine();
+      return { files: sync.getDirtyFiles(serverId, projectId) };
+    },
+  );
 
   // ---------- Audit ----------
   ipcMain.handle('audit:list', async (_e, { serverId, ...opts }) => {

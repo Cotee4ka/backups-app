@@ -128,11 +128,6 @@ function handleMessage(serverId: string, msg: ServerMessage): void {
     case 'presence:list':
       onEventCb?.(msg.type, { serverId, ...msg });
       break;
-    case 'lock:acquired':
-    case 'lock:heartbeat':
-    case 'lock:released':
-      onEventCb?.(msg.type, { serverId, ...msg });
-      break;
     case 'error':
       console.warn('[ws] error message:', msg);
       break;

@@ -8,9 +8,6 @@ import type {
   RepoUpdatedMessage,
   ProjectRestoredMessage,
   ProjectDeletedMessage,
-  LockAcquiredMessage,
-  LockHeartbeatMessage,
-  LockReleasedMessage,
 } from '@backups-app/shared';
 import { WS_PATH } from '@backups-app/shared';
 import type { AccessTokenPayload } from '../auth.js';
@@ -33,10 +30,7 @@ export function broadcastToProject(
   msg:
     | RepoUpdatedMessage
     | ProjectRestoredMessage
-    | ProjectDeletedMessage
-    | LockAcquiredMessage
-    | LockHeartbeatMessage
-    | LockReleasedMessage,
+    | ProjectDeletedMessage,
   exceptUserId?: string,
 ): void {
   const subs = projectIndex.get(projectId);

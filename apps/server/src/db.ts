@@ -76,28 +76,11 @@ export function getDb(): Database.Database {
       FOREIGN KEY (created_by) REFERENCES users(id),
       FOREIGN KEY (used_by) REFERENCES users(id)
     );
-
-    /* === Координация Claude-агентов / людей при работе на одном проекте.
-       Одна запись на проект (один лок). reason — свободный текст «что я делаю».
-       currently_editing — JSON-array путей, которые холдер сейчас правит локально
-         (приходит в heartbeat'ах из sync-engine.dirty).
-       session_files — JSON-array путей, тронутых за всю текущую сессию (из push'ей
-         после acquire). Сбрасывается на release. */
-    CREATE TABLE IF NOT EXISTS project_locks (
-      project_id TEXT PRIMARY KEY,
-      holder_user_id TEXT NOT NULL,
-      holder_username TEXT NOT NULL,
-      reason TEXT NOT NULL DEFAULT '',
-      acquired_at INTEGER NOT NULL,
-      expires_at INTEGER NOT NULL,
-      heartbeat_at INTEGER NOT NULL,
-      currently_editing TEXT NOT NULL DEFAULT '[]',
-      session_files TEXT NOT NULL DEFAULT '[]',
-      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
-      FOREIGN KEY (holder_user_id) REFERENCES users(id) ON DELETE CASCADE
-    );
-    CREATE INDEX IF NOT EXISTS idx_project_locks_holder ON project_locks(holder_user_id);
   `);
+
+  // Дроп старой таблицы локов (была введена в 0.5.0 для координации Claude-агентов,
+  // отказались от подхода в 0.6.0 — заменяется на простой last-author lookup).
+  db.exec(`DROP TABLE IF EXISTS project_locks;`);
 
   const projectCols = db
     .prepare(`PRAGMA table_info(projects)`)

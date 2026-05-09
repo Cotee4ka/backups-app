@@ -32,5 +32,5 @@ export const API_PATH = '/api';
  *
  * Бампать СИНХРОННО с `apps/server/src/version.ts` при выпуске релиза.
  */
-export const EXPECTED_SERVER_VERSION = '0.5.0';
-export const EXPECTED_INSTALL_SCRIPT_VERSION = '0.5.0';
+export const EXPECTED_SERVER_VERSION = '0.6.0';
+export const EXPECTED_INSTALL_SCRIPT_VERSION = '0.6.0';

@@ -15,7 +15,6 @@ import { authRoutes } from './routes/auth.js';
 import { projectRoutes } from './routes/projects.js';
 import { auditRoutes } from './routes/audit.js';
 import { inviteRoutes } from './routes/invites.js';
-import { lockRoutes } from './routes/locks.js';
 import { gitHttpRoutes } from './git/http.js';
 import { countUsers, hashPassword, upsertBootstrapUser } from './auth.js';
 import { SERVER_VERSION, SERVER_FEATURES, INSTALL_SCRIPT_VERSION } from './version.js';
@@ -86,7 +85,6 @@ async function bootstrap() {
     await projectRoutes(api);
     await auditRoutes(api);
     await inviteRoutes(api);
-    await lockRoutes(api);
   }, { prefix: '/api' });
 
   await app.register(gitHttpRoutes);

@@ -988,6 +988,34 @@ function FileBrowser({
     };
   }, [isExternal, serverId, projectId]);
 
+  // Mode 1: набор «грязных» (несинхронизированных) файлов — relPath с
+  // POSIX-разделителями. На Mode 2 не используется (там own diff-логика).
+  // Поллим раз в 3 сек: dirty-set меняется только когда юзер что-то правит,
+  // нагрузка минимальная. Альтернатива — push из main по событию, но IPC-event
+  // на каждое движение chokidar'а перебор для UI.
+  const [dirtyFiles, setDirtyFiles] = React.useState<Set<string>>(new Set());
+  React.useEffect(() => {
+    if (isExternal || !syncedFolder) {
+      setDirtyFiles(new Set());
+      return;
+    }
+    let cancelled = false;
+    const fetchDirty = async () => {
+      try {
+        const r = await window.backupsApp.sync.dirtyFiles(serverId, projectId);
+        if (!cancelled) setDirtyFiles(new Set(r.files));
+      } catch {
+        /* ignore */
+      }
+    };
+    void fetchDirty();
+    const t = setInterval(fetchDirty, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, [isExternal, syncedFolder, serverId, projectId]);
+
   // External one-way sync state
   interface ExtSync {
     projectId: string;
@@ -2031,6 +2059,27 @@ function FileBrowser({
                 {sorted.map((entry) => {
                   const status =
                     entry.type === 'file' ? fileStatuses.get(entry.path) : undefined;
+                  // Mode 1 (двусторонний синк): статус файла = есть ли он в dirty-сете.
+                  //   - in dirty → амберная скрепка (есть локальные изменения, ждём пуша)
+                  //   - not in dirty + синк активен → зелёная скрепка (синхронизирован)
+                  //   - синка нет → без скрепки
+                  // Папки: зелёная если ни один файл с этим префиксом не в dirty.
+                  const m1Dirty =
+                    !isExternal && entry.type === 'file' && dirtyFiles.has(entry.path);
+                  const m1Synced =
+                    !isExternal && !!syncedFolder && entry.type === 'file' && !m1Dirty;
+                  let m1FolderHasDirty = false;
+                  let m1FolderAllSynced = false;
+                  if (!isExternal && entry.type === 'dir' && syncedFolder) {
+                    const prefix = entry.path + '/';
+                    for (const p of dirtyFiles) {
+                      if (p.startsWith(prefix)) {
+                        m1FolderHasDirty = true;
+                        break;
+                      }
+                    }
+                    m1FolderAllSynced = !m1FolderHasDirty;
+                  }
                   // Зелёный маркер на папке: все её файлы (рекурсивно)
                   // синхронизированы. Игнорируем heavy и excluded — их быть не
                   // обязано локально, чтобы папка считалась «в порядке».
@@ -2133,6 +2182,30 @@ function FileBrowser({
                         {entry.type === 'dir' && folderAllSynced && (
                           <span title="Все файлы папки скачаны и совпадают с продой" className="absolute -bottom-0.5 -right-0.5 leading-none">
                             <Paperclip className="h-3 w-3 text-emerald-400/80 drop-shadow-[0_0_3px_rgba(74,222,128,0.95)]" />
+                          </span>
+                        )}
+                        {/* Mode 1: «зелёная скрепка» — файл синхронизирован с сервером. */}
+                        {m1Synced && (
+                          <span title="Синхронизирован с сервером" className="absolute -bottom-0.5 -right-0.5 leading-none">
+                            <Paperclip className="h-3 w-3 text-emerald-400/80 drop-shadow-[0_0_3px_rgba(74,222,128,0.95)]" />
+                          </span>
+                        )}
+                        {/* Mode 1: «амберная скрепка» — есть локальные изменения, ждём пуша. */}
+                        {m1Dirty && (
+                          <span title="Изменён локально, ждёт отправки на сервер" className="absolute -bottom-0.5 -right-0.5 leading-none">
+                            <Paperclip className="h-3 w-3 text-amber-400/80 drop-shadow-[0_0_3px_rgba(251,191,36,0.85)]" />
+                          </span>
+                        )}
+                        {/* Mode 1: папка — зелёная скрепка, если ни один её файл не dirty. */}
+                        {!isExternal && entry.type === 'dir' && syncedFolder && m1FolderAllSynced && (
+                          <span title="Все файлы папки синхронизированы" className="absolute -bottom-0.5 -right-0.5 leading-none">
+                            <Paperclip className="h-3 w-3 text-emerald-400/80 drop-shadow-[0_0_3px_rgba(74,222,128,0.95)]" />
+                          </span>
+                        )}
+                        {/* Mode 1: папка — амберная скрепка, если внутри есть dirty. */}
+                        {!isExternal && entry.type === 'dir' && syncedFolder && m1FolderHasDirty && (
+                          <span title="В папке есть несинхронизированные изменения" className="absolute -bottom-0.5 -right-0.5 leading-none">
+                            <Paperclip className="h-3 w-3 text-amber-400/80 drop-shadow-[0_0_3px_rgba(251,191,36,0.85)]" />
                           </span>
                         )}
                       </span>

@@ -8,7 +8,6 @@ import { ensureRepo } from './repo.js';
 import { getDb } from '../db.js';
 import type { AccessTokenPayload } from '../auth.js';
 import { broadcastToProject } from '../ws/hub.js';
-import { recordLockSessionFiles } from '../routes/locks.js';
 
 /**
  * Smart-HTTP git endpoint: GET /git/:projectId/info/refs?service=...
@@ -138,7 +137,7 @@ async function runGitHttpBackend(
 ): Promise<void> {
   // Снимаем HEAD ДО запуска git-receive-pack, чтобы потом посчитать
   // дельту: какие файлы реально пришли в этом push'е. Используется для
-  // session_files активного lock'а — ждущий агент видит «трогали то-то».
+  // audit_log и WS broadcast'а repo:updated (счётчик filesChanged).
   const prevHead =
     subpath === 'git-receive-pack' ? await readHeadSafe(repoPath) : null;
   return new Promise((resolve) => {
@@ -251,10 +250,6 @@ async function runGitHttpBackend(
             } catch {
               /* ignore */
             }
-          }
-
-          if (pushedFiles.length > 0) {
-            recordLockSessionFiles(ctx.projectId, pushedFiles);
           }
 
           broadcastToProject(ctx.projectId, {

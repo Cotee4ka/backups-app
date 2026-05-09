@@ -24,9 +24,6 @@ export type ServerMessageType =
   | 'presence:join'
   | 'presence:leave'
   | 'presence:list'
-  | 'lock:acquired'
-  | 'lock:heartbeat'
-  | 'lock:released'
   | 'error';
 
 export interface BaseMessage<T extends string> {
@@ -111,42 +108,6 @@ export interface ErrorMessage extends BaseMessage<'error'> {
   message: string;
 }
 
-/**
- * Координация Claude-агентов / людей: один лок на проект, видимость
- * статуса всем подписчикам. Холдер шлёт heartbeat'ы (с currentlyEditing —
- * тем что сейчас правит локально), сервер ретранслирует.
- */
-export interface ProjectLockState {
-  projectId: ProjectId;
-  holderUserId: UserId;
-  holderUsername: string;
-  reason: string;
-  acquiredAt: number;
-  expiresAt: number;
-  heartbeatAt: number;
-  /** Что холдер сейчас правит локально (из dirty-сета sync-engine'а). */
-  currentlyEditing: string[];
-  /** Файлы, тронутые за всю сессию (из push'ей после acquire). */
-  sessionFiles: string[];
-}
-
-export interface LockAcquiredMessage extends BaseMessage<'lock:acquired'> {
-  lock: ProjectLockState;
-}
-
-export interface LockHeartbeatMessage extends BaseMessage<'lock:heartbeat'> {
-  lock: ProjectLockState;
-}
-
-export interface LockReleasedMessage extends BaseMessage<'lock:released'> {
-  projectId: ProjectId;
-  byUserId: UserId;
-  /** Свободный текст: что сделано за сессию. Холдер пишет на release. */
-  summary?: string;
-  /** Финальный список файлов сессии — для краткого «что трогали». */
-  sessionFiles?: string[];
-}
-
 export type ServerMessage =
   | AuthOkMessage
   | AuthErrorMessage
@@ -156,9 +117,6 @@ export type ServerMessage =
   | PresenceJoinMessage
   | PresenceLeaveMessage
   | PresenceListMessage
-  | LockAcquiredMessage
-  | LockHeartbeatMessage
-  | LockReleasedMessage
   | ErrorMessage;
 
 export type AnyMessage = ClientMessage | ServerMessage;
