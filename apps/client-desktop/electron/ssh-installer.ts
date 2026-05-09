@@ -297,8 +297,14 @@ export function findInstallScript(): string {
   return findScriptByName('install.sh', 'BACKUPS_INSTALL_SCRIPT');
 }
 
+/** Mode 2 — Prod (read-only mirror через /host:ro). */
 export function findInstallScriptV2(): string {
   return findScriptByName('install-v2.sh', 'BACKUPS_INSTALL_SCRIPT_V2');
+}
+
+/** Mode 1 — Projects (двухсторонняя git-синхронизация, без host mount). */
+export function findInstallScriptProjects(): string {
+  return findScriptByName('install-projects.sh', 'BACKUPS_INSTALL_SCRIPT_PROJECTS');
 }
 
 function findScriptByName(name: string, envVar: string): string {

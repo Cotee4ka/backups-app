@@ -1,40 +1,35 @@
 #!/usr/bin/env bash
-# Backups App — Mode 2 (Prod). Установщик для read-only зеркала
-# продакшен-папки в клиент через монтирование / -> /host:ro в контейнер.
+# Backups App — Mode 1 (Projects). Установщик для двухсторонней
+# git-синхронизации проектов на VPS Ubuntu.
 #
 # ДВА РЕЖИМА В ЭТОМ РЕПОЗИТОРИИ — внимание, не путать:
-#   * install-v2.sh (этот файл) — Mode 2: монтирует хостовую ФС в /host:ro,
-#     даёт клиенту читать любые папки на проде через external-проекты.
-#     Используется визардом «Подключиться к проде».
-#   * install-projects.sh — Mode 1: только двухсторонняя git-синхронизация,
-#     БЕЗ доступа к хостовой ФС. Используется визардом «Создать сервер».
+#   * install-projects.sh (этот файл) — Mode 1: ТОЛЬКО двухсторонняя
+#     git-синхронизация. БЕЗ монтирования хостовой ФС в контейнер.
+#     Используется визардом «Создать сервер».
+#   * install-v2.sh — Mode 2: read-only mirror с проды через монтирование
+#     / -> /host:ro в контейнер. Используется визардом «Подключиться к проде».
 #   * install.sh — legacy v1 для Mode 2 (без --check/--apply, без авто-апдейтов).
 #
-# Отличия от v1:
+# Особенности:
 #   * Идемпотентный — гонится сколько угодно раз, состояние сходится.
 #   * Знает свою версию и пишет её в /opt/backups-app/install-version.txt.
 #   * Не перезатирает существующие креды в .env при апдейте — читает
 #     ADMIN_USER/ADMIN_PASS/JWT_SECRET и сохраняет их.
-#   * Без watchtower — апдейтом образа управляет клиент (явный pull при
-#     подключении, если хеш в реестре изменился).
-#   * Поддерживает два режима:
-#       --check  : ничего не ставит, печатает JSON состояния и выходит.
-#       --apply  : ставит/обновляет до целевой версии.
-#   * Печатает BACKUPS_PHASE=<phase> маркеры — клиент стримит их в UI.
-#   * В конце печатает BACKUPS_INSTALL_RESULT={...} JSON с кредами и
-#     fingerprint'ом TLS, чтобы клиент мог сразу логиниться.
+#   * Два режима вызова: --check и --apply. BACKUPS_PHASE-маркеры в stderr,
+#     BACKUPS_INSTALL_RESULT в stdout.
 #
 # Целевая ОС: Ubuntu 20.04+ (Debian тоже должен работать).
 #
 # Использование:
-#   sudo bash install-v2.sh --check
-#   sudo bash install-v2.sh --apply --target-version 0.4.0 \
+#   sudo bash install-projects.sh --check
+#   sudo bash install-projects.sh --apply --target-version 0.4.0 \
 #     --image ghcr.io/cotee4ka/backups-app-server:0.4.0 \
 #     --port 8443 --admin-user owner
 
 set -euo pipefail
 
 INSTALL_SCRIPT_VERSION="0.4.0"
+INSTALL_MODE="projects"
 
 # --- defaults ---
 MODE=""
@@ -45,12 +40,14 @@ TARGET_VERSION=""
 IMAGE="${BACKUPS_IMAGE:-ghcr.io/cotee4ka/backups-app-server:latest}"
 INSTALL_DIR="/opt/backups-app"
 SOURCE_DIR=""
-HOST_MOUNT="/:/host:ro"
+# Mode 1 = НЕ монтируем хостовую ФС. (Если очень надо — можно дать
+# --host-mount явно, но по умолчанию выключено.)
+HOST_MOUNT=""
 
 # --- helpers ---
 phase() { printf 'BACKUPS_PHASE=%s\n' "$1" >&2; }
-log()   { printf '[install-v2] %s\n' "$*" >&2; }
-die()   { printf '[install-v2][error] %s\n' "$*" >&2; exit 1; }
+log()   { printf '[install-projects] %s\n' "$*" >&2; }
+die()   { printf '[install-projects][error] %s\n' "$*" >&2; exit 1; }
 
 # JSON-escape a string (только базовые экранирования для наших значений)
 jsonesc() {

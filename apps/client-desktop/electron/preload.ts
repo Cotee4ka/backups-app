@@ -20,16 +20,28 @@ const api = {
       sshPassword: string;
       serverPort: number;
       adminUser: string;
+      kind?: 'projects' | 'prod';
     }) => ipcRenderer.invoke('servers:install', params),
     connect: (params: {
       url: string;
       username: string;
       password: string;
+      kind?: 'projects' | 'prod';
     }) => ipcRenderer.invoke('servers:connect', params),
     delete: (id: string) => ipcRenderer.invoke('servers:delete', id),
-    rename: (id: string, name: string) => ipcRenderer.invoke('servers:rename', { serverId: id, name }),
+    rename: (id: string, name: string) =>
+      ipcRenderer.invoke('servers:rename', { serverId: id, name }),
+    setKind: (id: string, kind: 'projects' | 'prod') =>
+      ipcRenderer.invoke('servers:setKind', { serverId: id, kind }),
     checkVersion: (id: string) => ipcRenderer.invoke('servers:checkVersion', { serverId: id }),
     verifyCurrent: (id: string) => ipcRenderer.invoke('servers:verifyCurrent', { serverId: id }),
+    onListChanged: (cb: (reason: string) => void) => {
+      const sub = (_e: unknown, p: { reason: string }) => cb(p.reason);
+      ipcRenderer.on('servers:listChanged', sub);
+      return () => {
+        ipcRenderer.removeListener('servers:listChanged', sub);
+      };
+    },
     onInstallLog: (cb: (msg: { line: string; type: 'stdout' | 'stderr' | 'info' }) => void) => {
       const sub = (_e: unknown, msg: { line: string; type: 'stdout' | 'stderr' | 'info' }) =>
         cb(msg);
@@ -57,6 +69,7 @@ const api = {
       publicUrl?: string;
       imageRef?: string;
       autoConnect?: boolean;
+      kind?: 'projects' | 'prod';
     }) => ipcRenderer.invoke('installer:apply', params),
     installSshKey: (params: {
       sshHost: string;

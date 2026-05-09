@@ -17,6 +17,12 @@ export interface ServerSummary {
   fingerprint: string;
   username: string;
   lastConnectedAt?: number;
+  /**
+   * Тип сервера: 'projects' — наш бэкап-сервер с двухсторонней синхронизацией,
+   * 'prod' — продакшен с лёгким агентом для одностороннего mirror'а.
+   * Сайдбар разделяет их по этому полю.
+   */
+  kind?: 'projects' | 'prod';
   syncedFolders: Array<{
     projectId: string;
     projectName: string;
