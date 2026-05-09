@@ -967,6 +967,27 @@ function FileBrowser({
   const [historyLoading, setHistoryLoading] = React.useState(false);
   const [serverNeedsUpdate, setServerNeedsUpdate] = React.useState(false);
 
+  // Mode 1: лента последних коммитов проекта — для правого панели
+  // когда файл не выбран. На Mode 2 не используется.
+  const [recentCommits, setRecentCommits] = React.useState<CommitInfo[]>([]);
+  React.useEffect(() => {
+    if (isExternal) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const r = (await window.backupsApp.projects.history(serverId, projectId, 30)) as {
+          commits: CommitInfo[];
+        };
+        if (!cancelled) setRecentCommits(r.commits);
+      } catch {
+        if (!cancelled) setRecentCommits([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isExternal, serverId, projectId]);
+
   // External one-way sync state
   interface ExtSync {
     projectId: string;
@@ -1962,12 +1983,8 @@ function FileBrowser({
             })}
           </div>
 
-          {syncedFolder && !isExternal && (
-            <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-3 py-2 text-xs text-muted-foreground">
-              Локальная папка синхронизации:{' '}
-              <code className="font-mono text-foreground">{syncedFolder}</code>
-            </div>
-          )}
+          {/* Локальная папка синхронизации показывается в шапке Project — здесь
+              отдельная плашка дублировала бы информацию. */}
 
           {/* Sync-панели и прогресс перенесены в правую sidebar колонку. */}
 
@@ -2501,16 +2518,58 @@ function FileBrowser({
         ) : (
           <Card>
             <CardHeader>
-              <CardTitle>История файла</CardTitle>
+              <CardTitle>{selected ? 'История файла' : 'История изменений'}</CardTitle>
               <CardDescription>
-                {selected ? selected.path : 'Выберите файл слева, чтобы увидеть всю историю.'}
+                {selected
+                  ? selected.path
+                  : 'Последние коммиты проекта. Кликни на файл слева, чтобы посмотреть его отдельную историю.'}
               </CardDescription>
             </CardHeader>
             <CardContent>
+              {/* Когда файл НЕ выбран — фид коммитов проекта (как в Mode 2,
+                  только тут источник — git, а не mtime файлов). */}
               {!selected ? (
-                <div className="rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
-                  Здесь появятся авторы, даты изменений и версии выбранного файла.
-                </div>
+                recentCommits.length === 0 ? (
+                  <div className="rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
+                    Истории нет — это новый проект. Сделайте первый push, чтобы зафиксировать точку отсчёта.
+                  </div>
+                ) : (
+                  <ul className="space-y-2">
+                    {recentCommits.map((c) => (
+                      <li
+                        key={c.sha}
+                        className="cursor-default rounded-md border border-border bg-muted/10 p-2.5"
+                      >
+                        <div className="flex items-center gap-2">
+                          <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                          <span className="truncate text-sm font-medium">
+                            {parseAuthorMessage(c.message)}
+                          </span>
+                          <code className="ml-auto rounded bg-muted/40 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+                            {shortSha(c.sha)}
+                          </code>
+                        </div>
+                        <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                          <span>{c.authorName}</span>
+                          <span>·</span>
+                          <span>{formatRelativeTime(c.timestamp)}</span>
+                          {c.filesChanged > 0 && (
+                            <>
+                              <span>·</span>
+                              <span>{c.filesChanged} файлов</span>
+                            </>
+                          )}
+                          {(c.insertions > 0 || c.deletions > 0) && (
+                            <span className="ml-auto flex items-center gap-1.5 font-mono">
+                              <span className="text-emerald-400">+{c.insertions}</span>
+                              <span className="text-rose-400">−{c.deletions}</span>
+                            </span>
+                          )}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )
               ) : historyLoading ? (
                 <div className="py-8 text-center text-sm text-muted-foreground">Загрузка истории…</div>
               ) : fileHistory.length === 0 ? (
