@@ -662,6 +662,17 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     },
   );
   ipcMain.handle('projects:delete', async (_e, { serverId, projectId }) => {
+    // Останавливаем активную синхронизацию (если есть), чистим watcher'ы.
+    try {
+      const sync = await ensureSyncEngine();
+      await sync.stopSync(serverId, projectId);
+      unsubscribeProject(serverId, projectId);
+    } catch {
+      /* sync мог быть не активен — это ок */
+    }
+    // Чистим локальную запись о синхронизированной папке.
+    getServerStore().removeSyncedFolder(serverId, projectId);
+    // Дёргаем серверный delete — он же удалит bare repo через deleteRepo().
     return new ApiClient(serverId).deleteProject(projectId);
   });
   ipcMain.handle('projects:history', async (_e, { serverId, projectId, limit }) => {
