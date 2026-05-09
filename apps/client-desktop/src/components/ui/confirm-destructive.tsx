@@ -2,8 +2,7 @@ import React from 'react';
 import { Dialog } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { AlertTriangle, Trash2 } from 'lucide-react';
+import { AlertTriangle, KeySquare, Trash2 } from 'lucide-react';
 
 interface Props {
   open: boolean;
@@ -100,14 +99,19 @@ export const ConfirmDestructiveDialog = ({
 
         {extraContent}
 
-        <div className="space-y-1.5">
-          <Label htmlFor="confirm-phrase">
-            Введите{' '}
-            <span className="font-mono font-semibold text-foreground">
-              {confirmPhrase}
-            </span>{' '}
-            для подтверждения
-          </Label>
+        {/* Поле ручного ввода фразы — стилистически совпадает с пунктирной
+            плашкой команды в ServerOutdatedModal: тот же бордер, тот же фон. */}
+        <div className="rounded-lg border-2 border-dashed border-border bg-muted/20 p-3 space-y-2">
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <KeySquare className="h-3.5 w-3.5 shrink-0" />
+            <span>
+              Введите{' '}
+              <span className="font-mono font-semibold text-foreground">
+                {confirmPhrase}
+              </span>{' '}
+              для подтверждения:
+            </span>
+          </div>
           <Input
             id="confirm-phrase"
             autoFocus
@@ -120,7 +124,7 @@ export const ConfirmDestructiveDialog = ({
               if (e.key === 'Enter' && matches && !busy) void run();
             }}
             className={
-              'font-mono ' +
+              'font-mono bg-background/60 ' +
               (matches
                 ? 'border-emerald-500/60 ring-1 ring-emerald-500/40'
                 : typed.length > 0
@@ -128,8 +132,9 @@ export const ConfirmDestructiveDialog = ({
                   : '')
             }
           />
-          <p className="text-xs text-muted-foreground">
-            Регистр поднимается автоматически.
+          <p className="text-[11px] text-muted-foreground">
+            Регистр поднимается автоматически — вводи как удобно. Enter подтверждает,
+            если фраза совпала.
           </p>
         </div>
 
