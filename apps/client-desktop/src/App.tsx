@@ -58,6 +58,16 @@ export default function App(): JSX.Element {
     return offSync;
   }, [setSyncStatus]);
 
+  // Сервер мог пере-классифицироваться на старте (kind: undefined → projects/prod).
+  // Слушаем сигнал и обновляем сайдбар.
+  const refreshServers = useAppStore((s) => s.refreshServers);
+  React.useEffect(() => {
+    const off = window.backupsApp.servers.onListChanged?.(() => {
+      void refreshServers();
+    });
+    return off;
+  }, [refreshServers]);
+
   React.useEffect(() => {
     const offRepo = window.backupsApp.events.on('repo:updated', (p) => {
       const ev = p as { authorName?: string; projectId: string };

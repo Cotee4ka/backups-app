@@ -126,6 +126,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       accessExpiresAt: auth.tokens.accessExpiresAt,
       refreshExpiresAt: auth.tokens.refreshExpiresAt,
       lastConnectedAt: Date.now(),
+      // CreateServerWizard всегда поднимает наш бэкап-сервер для двухсторонней
+      // git-синхронизации проектов. Mode 1.
+      kind: (params.kind as 'projects' | 'prod') ?? 'projects',
       syncedFolders: [],
     };
     getServerStore().upsertServer(stored);
@@ -163,6 +166,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       accessExpiresAt: auth.tokens.accessExpiresAt,
       refreshExpiresAt: auth.tokens.refreshExpiresAt,
       lastConnectedAt: Date.now(),
+      // ConnectServerWizard работает с уже поднятым сервером — обычно это
+      // прода (Mode 2, read-only mirror через `/host:ro`). Wizard передаёт
+      // явный kind; default 'prod' тоже разумный, но оставим строгим — пусть
+      // wizard всегда явно передаёт.
+      kind: (params.kind as 'projects' | 'prod') ?? 'prod',
       syncedFolders: [],
     };
     getServerStore().upsertServer(stored);
@@ -170,6 +178,27 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     ensureConnection(stored.id);
     return { server: stripSecrets(stored) };
   });
+
+  /**
+   * Перепомечает kind существующего сервера. Используется как для ручного
+   * переключения юзером, так и для авто-детекта на странице Server.tsx
+   * (если есть external-проекты — сервер по факту 'prod').
+   */
+  ipcMain.handle(
+    'servers:setKind',
+    async (
+      _e,
+      { serverId, kind }: { serverId: string; kind: 'projects' | 'prod' },
+    ) => {
+      const store = getServerStore();
+      const server = store.getServer(serverId);
+      if (!server) throw new Error('Server not found');
+      if (server.kind === kind) return stripSecrets(server);
+      const updated = { ...server, kind };
+      store.upsertServer(updated);
+      return stripSecrets(updated);
+    },
+  );
 
   ipcMain.handle('servers:delete', async (_e, id: string) => {
     getServerStore().deleteServer(id);
@@ -456,10 +485,20 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
         imageRef?: string;
         /** Если true — после успешного apply сразу логинимся и сохраняем сервер. */
         autoConnect?: boolean;
+        /**
+         * 'projects' — wizard «Создать сервер» (двухсторонняя git-синк).
+         * 'prod'     — wizard «Подключиться к проде» (read-only mirror).
+         * По умолчанию 'projects' для обратной совместимости со старыми вызовами.
+         */
+        kind?: 'projects' | 'prod';
       },
     ) => {
-      const { findInstallScriptV2, applyRemoteHost } = await import('./ssh-installer');
-      const installScriptPath = findInstallScriptV2();
+      const { findInstallScriptV2, findInstallScriptProjects, applyRemoteHost } =
+        await import('./ssh-installer');
+      // Mode 1 (Projects) — install-projects.sh, без host mount.
+      // Mode 2 (Prod, default) — install-v2.sh с /host:ro.
+      const installScriptPath =
+        params.kind === 'projects' ? findInstallScriptProjects() : findInstallScriptV2();
       const win = getWin();
       const applied = await applyRemoteHost(
         {
@@ -516,6 +555,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
         accessExpiresAt: auth.tokens.accessExpiresAt,
         refreshExpiresAt: auth.tokens.refreshExpiresAt,
         lastConnectedAt: Date.now(),
+        kind: params.kind ?? 'projects',
         syncedFolders: [],
       };
       getServerStore().upsertServer(stored);
@@ -792,6 +832,29 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     for (const s of getServerStore().listServers()) {
       ensureConnection(s.id);
     }
+    // Авто-детект kind для legacy-серверов (добавленных до появления поля).
+    // Делаем один раз на старте: если у сервера kind ещё не задан, спрашиваем
+    // его список проектов и решаем — есть ли external (Mode 2 / 'prod') или
+    // только обычные (Mode 1 / 'projects'). Сетевые ошибки игнорим.
+    void (async () => {
+      const store = getServerStore();
+      let changed = false;
+      for (const s of store.listServers()) {
+        if (s.kind) continue;
+        try {
+          const r = await new ApiClient(s.id).listProjects();
+          const hasExternal = r.projects.some((p) => !!p.externalPath);
+          const detected: 'projects' | 'prod' = hasExternal ? 'prod' : 'projects';
+          store.upsertServer({ ...s, kind: detected });
+          changed = true;
+        } catch {
+          /* offline / token expired — оставляем без kind, попробуем в следующий старт */
+        }
+      }
+      if (changed) {
+        getWin()?.webContents.send('servers:listChanged', { reason: 'auto-kind-detect' });
+      }
+    })();
   });
 }
 
@@ -804,6 +867,7 @@ function stripSecrets(s: StoredServer) {
     username: s.username,
     lastConnectedAt: s.lastConnectedAt,
     syncedFolders: s.syncedFolders,
+    kind: s.kind ?? ('projects' as const),
   };
 }
 

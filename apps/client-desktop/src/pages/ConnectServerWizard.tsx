@@ -15,7 +15,6 @@ import {
   Globe,
   ShieldCheck,
   ChevronRight,
-  Sparkles,
   Pencil,
   Terminal,
   Copy,
@@ -27,7 +26,7 @@ import {
 } from 'lucide-react';
 import { copyToClipboard } from '@/lib/utils';
 
-type Mode = 'ssh' | 'manual';
+type Mode = 'ssh' | 'pair';
 type Step = 'connection' | 'install' | 'done';
 type InstallAction =
   | 'full-install'
@@ -118,14 +117,8 @@ export const ConnectServerWizard = () => {
   const [serverPort, setServerPort] = React.useState('8443');
   const [adminUser, setAdminUser] = React.useState('owner');
 
-  // Manual form state
+  // Pair-token form state
   const [token, setToken] = React.useState('');
-  const [manualUrl, setManualUrl] = React.useState('https://');
-  const [manualUsername, setManualUsername] = React.useState('');
-  const [manualPassword, setManualPassword] = React.useState('');
-  const [manualSubmode, setManualSubmode] = React.useState<'token' | 'manual'>(
-    'token',
-  );
 
   // Process state
   const [busy, setBusy] = React.useState(false);
@@ -216,6 +209,7 @@ export const ConnectServerWizard = () => {
         serverPort: Number(serverPort) || 8443,
         adminUser: adminUser.trim() || 'owner',
         autoConnect: true,
+        kind: 'prod',
       })) as {
         applied: ApplyResult;
         server: { id: string; url: string; fingerprint: string };
@@ -246,9 +240,9 @@ export const ConnectServerWizard = () => {
     }
   }
 
-  // ----------------------- MANUAL FLOW -----------------------
+  // ----------------------- PAIR-TOKEN FLOW -----------------------
 
-  async function submitManualToken() {
+  async function submitPairToken() {
     const parsed = parsePairToken(token);
     if (!parsed) {
       addToast({
@@ -257,31 +251,14 @@ export const ConnectServerWizard = () => {
       });
       return;
     }
-    await connectManual({ url: parsed.url, username: parsed.u, password: parsed.pw });
-  }
-
-  async function submitManualForm() {
-    if (!manualUrl.startsWith('https://')) {
-      addToast({ type: 'error', text: 'Используйте https://' });
-      return;
-    }
-    await connectManual({
-      url: manualUrl,
-      username: manualUsername,
-      password: manualPassword,
-    });
-  }
-
-  async function connectManual(payload: {
-    url: string;
-    username: string;
-    password: string;
-  }) {
     setBusy(true);
     try {
-      const res = (await window.backupsApp.servers.connect(payload)) as {
-        server: { id: string };
-      };
+      const res = (await window.backupsApp.servers.connect({
+        url: parsed.url,
+        username: parsed.u,
+        password: parsed.pw,
+        kind: 'prod',
+      })) as { server: { id: string } };
       // version gate — не пускаем на устаревший хост.
       const verify = (await window.backupsApp.servers.verifyCurrent(
         res.server.id,
@@ -300,10 +277,8 @@ export const ConnectServerWizard = () => {
             type: 'error',
             text: `Сервер ${verify.current} устарел. Ожидается ${verify.expected}. Обнови через SSH.`,
           });
-          // Удаляем только что добавленный сервер, чтобы юзер не «зашёл».
           await window.backupsApp.servers.delete(res.server.id);
           await refresh();
-          // Подсказываем перейти в SSH-таб.
           setMode('ssh');
         } else {
           addToast({
@@ -336,9 +311,9 @@ export const ConnectServerWizard = () => {
         </div>
         <h1 className="text-2xl font-semibold tracking-tight">Подключить сервер</h1>
         <p className="text-sm text-muted-foreground">
-          Через SSH мы сами проверим версию и накатим обновление, если оно нужно.
-          Можно подключиться и вручную — тогда после входа версия будет проверена,
-          и если хост устарел, в него не пустит.
+          Дай SSH-доступ — клиент сам проверит и при необходимости обновит сервер
+          до актуальной версии. Если SSH недоступен — вкладка «Pair-токен»: запусти
+          команду на VPS вручную и вставь полученный токен сюда.
         </p>
       </header>
 
@@ -354,12 +329,12 @@ export const ConnectServerWizard = () => {
               Через SSH (рекомендуется)
             </Button>
             <Button
-              variant={mode === 'manual' ? 'default' : 'outline'}
+              variant={mode === 'pair' ? 'default' : 'outline'}
               size="sm"
-              onClick={() => setMode('manual')}
+              onClick={() => setMode('pair')}
             >
               <Pencil className="h-4 w-4" />
-              Вручную
+              Pair-токен
             </Button>
           </div>
 
@@ -382,22 +357,13 @@ export const ConnectServerWizard = () => {
             />
           )}
 
-          {mode === 'manual' && (
-            <ManualForm
-              submode={manualSubmode}
-              setSubmode={setManualSubmode}
+          {mode === 'pair' && (
+            <PairForm
               token={token}
               setToken={setToken}
-              url={manualUrl}
-              setUrl={setManualUrl}
-              username={manualUsername}
-              setUsername={setManualUsername}
-              password={manualPassword}
-              setPassword={setManualPassword}
               busy={busy}
               onCancel={() => nav(-1)}
-              onSubmitToken={submitManualToken}
-              onSubmitForm={submitManualForm}
+              onSubmit={submitPairToken}
             />
           )}
         </>
@@ -543,187 +509,93 @@ const SshForm = ({
   </Card>
 );
 
-const ManualForm = ({
-  submode,
-  setSubmode,
+const PAIR_INSTALL_COMMAND =
+  'curl -fsSL https://raw.githubusercontent.com/Cotee4ka/backups-app/main/apps/server/scripts/install-v2.sh | sudo bash -s -- --apply';
+
+const PairForm = ({
   token,
   setToken,
-  url,
-  setUrl,
-  username,
-  setUsername,
-  password,
-  setPassword,
   busy,
   onCancel,
-  onSubmitToken,
-  onSubmitForm,
+  onSubmit,
 }: {
-  submode: 'token' | 'manual';
-  setSubmode: (s: 'token' | 'manual') => void;
   token: string;
   setToken: (v: string) => void;
-  url: string;
-  setUrl: (v: string) => void;
-  username: string;
-  setUsername: (v: string) => void;
-  password: string;
-  setPassword: (v: string) => void;
   busy: boolean;
   onCancel: () => void;
-  onSubmitToken: () => void;
-  onSubmitForm: () => void;
+  onSubmit: () => void;
 }) => (
-  <>
-    <div className="flex gap-2">
-      <Button
-        variant={submode === 'token' ? 'default' : 'outline'}
-        size="sm"
-        onClick={() => setSubmode('token')}
-      >
-        <Sparkles className="h-4 w-4" />
-        Pair-токен
-      </Button>
-      <Button
-        variant={submode === 'manual' ? 'default' : 'outline'}
-        size="sm"
-        onClick={() => setSubmode('manual')}
-      >
-        <Pencil className="h-4 w-4" />
-        URL + логин/пароль
-      </Button>
-    </div>
+  <Card>
+    <CardHeader>
+      <CardTitle>Pair-токен</CardTitle>
+      <CardDescription>
+        Запусти одну команду на сервере — она напечатает токен. Вставь его сюда.
+      </CardDescription>
+    </CardHeader>
+    <CardContent className="space-y-4">
+      <div className="rounded-lg border-2 border-dashed border-border bg-muted/20 p-3 space-y-2">
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <Terminal className="h-3.5 w-3.5 shrink-0" />
+          <span>Выполнить на VPS по SSH:</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <code className="flex-1 rounded bg-background/60 px-3 py-2 font-mono text-[11px] text-foreground/80 break-all">
+            {PAIR_INSTALL_COMMAND}
+          </code>
+          <button
+            className="shrink-0 rounded p-2 hover:bg-accent transition-colors"
+            title="Скопировать"
+            onClick={() => copyToClipboard(PAIR_INSTALL_COMMAND)}
+          >
+            <Copy className="h-3.5 w-3.5 text-muted-foreground" />
+          </button>
+        </div>
+        <p className="text-[11px] text-muted-foreground">
+          Скрипт идемпотентный: если сервер уже стоит, он лишь обновится до
+          актуальной версии, креды владельца сохранятся.
+        </p>
+      </div>
 
-    {submode === 'token' ? (
-      <Card>
-        <CardHeader>
-          <CardTitle>Pair-токен</CardTitle>
-          <CardDescription>
-            Запусти одну команду на сервере — она напечатает токен. Вставь его сюда.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="rounded-lg border border-border bg-muted/20 p-3 space-y-2">
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <Terminal className="h-3.5 w-3.5 shrink-0" />
-              <span>Запусти на своей проде по SSH:</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <code className="flex-1 rounded bg-background/60 px-3 py-2 font-mono text-[11px] text-foreground/80 break-all">
-                curl -fsSL
-                https://raw.githubusercontent.com/Cotee4ka/backups-app/main/apps/server/scripts/install-v2.sh
-                | sudo bash -s -- --apply
-              </code>
-              <button
-                className="shrink-0 rounded p-2 hover:bg-accent transition-colors"
-                title="Скопировать"
-                onClick={() =>
-                  copyToClipboard(
-                    'curl -fsSL https://raw.githubusercontent.com/Cotee4ka/backups-app/main/apps/server/scripts/install-v2.sh | sudo bash -s -- --apply',
-                  )
-                }
-              >
-                <Copy className="h-3.5 w-3.5 text-muted-foreground" />
-              </button>
-            </div>
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="tok">Pair-токен</Label>
-            <textarea
-              id="tok"
-              className="flex min-h-[112px] w-full resize-y rounded-md border border-input bg-background px-3 py-2 font-mono text-xs shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
-              placeholder="bap2.eyJ2IjoyLCJ1cmwiOiJodHRwczovLy4uLiJ9"
-              value={token}
-              onChange={(e) => setToken(e.target.value)}
-            />
-            <p className="text-xs text-muted-foreground">
-              В токене зашиты адрес сервера, TLS fingerprint, логин и пароль.
-              Креды сохранятся локально и зашифруются.
-            </p>
-          </div>
+      <div className="space-y-1.5">
+        <Label htmlFor="tok">Pair-токен из вывода скрипта</Label>
+        <textarea
+          id="tok"
+          className="flex min-h-[112px] w-full resize-y rounded-md border border-input bg-background px-3 py-2 font-mono text-xs shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+          placeholder="bap2.eyJ2IjoyLCJ1cmwiOiJodHRwczovLy4uLiJ9"
+          value={token}
+          onChange={(e) => setToken(e.target.value)}
+        />
+        <p className="text-xs text-muted-foreground">
+          В токене зашиты адрес сервера, TLS fingerprint, логин и пароль.
+          Креды сохранятся локально и зашифруются.
+        </p>
+      </div>
 
-          <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
-            <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
-            <div>
-              <strong className="text-foreground">TLS pinning + version-gate.</strong>{' '}
-              Fingerprint из токена сравнится с реальным сертификатом. После входа
-              версия серверной части тоже проверится — если хост устарел, в него
-              не пустит, потребуется обновить через SSH.
-            </div>
-          </div>
+      <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+        <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
+        <div>
+          <strong className="text-foreground">TLS pinning + version-gate.</strong>{' '}
+          Fingerprint из токена сравнится с реальным сертификатом. После входа
+          версия серверной части тоже проверится — если хост устарел, в него
+          не пустит, потребуется обновить через SSH.
+        </div>
+      </div>
 
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="ghost" onClick={onCancel}>
-              Отмена
-            </Button>
-            <Button
-              variant="gradient"
-              onClick={onSubmitToken}
-              disabled={busy || !token.trim()}
-            >
-              {busy ? 'Подключаемся…' : 'Подключиться'}{' '}
-              <ChevronRight className="h-4 w-4" />
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-    ) : (
-      <Card>
-        <CardHeader>
-          <CardTitle>Параметры подключения</CardTitle>
-          <CardDescription>
-            Данные будут зашифрованы локально, а TLS fingerprint сохранится после
-            первого подключения.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="url">URL сервера</Label>
-            <Input
-              id="url"
-              placeholder="https://example.com:8443"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-            />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label htmlFor="un">Логин</Label>
-              <Input id="un" value={username} onChange={(e) => setUsername(e.target.value)} />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="pw">Пароль</Label>
-              <Input
-                id="pw"
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-              />
-            </div>
-          </div>
-
-          <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
-            <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
-            <div>
-              <strong className="text-foreground">Version-gate.</strong> Если на
-              хосте устаревшая версия серверной части — клиент откажется в неё
-              входить и покажет, как обновить.
-            </div>
-          </div>
-
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="ghost" onClick={onCancel}>
-              Отмена
-            </Button>
-            <Button variant="gradient" onClick={onSubmitForm} disabled={busy}>
-              {busy ? 'Подключаемся…' : 'Подключиться'}{' '}
-              <ChevronRight className="h-4 w-4" />
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-    )}
-  </>
+      <div className="flex justify-end gap-2 pt-2">
+        <Button variant="ghost" onClick={onCancel}>
+          Отмена
+        </Button>
+        <Button
+          variant="gradient"
+          onClick={onSubmit}
+          disabled={busy || !token.trim()}
+        >
+          {busy ? 'Подключаемся…' : 'Подключиться'}{' '}
+          <ChevronRight className="h-4 w-4" />
+        </Button>
+      </div>
+    </CardContent>
+  </Card>
 );
 
 const InstallProgress = ({

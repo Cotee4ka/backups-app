@@ -103,6 +103,10 @@
         "to": "install-v2.sh"
       },
       {
+        "from": "../server/scripts/install-projects.sh",
+        "to": "install-projects.sh"
+      },
+      {
         "from": "../../package.json",
         "to": "server-source/package.json"
       },

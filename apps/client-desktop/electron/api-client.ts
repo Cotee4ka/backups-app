@@ -124,7 +124,18 @@ export class ApiClient {
     return this.request('/api/info', { auth: false });
   }
 
-  async listProjects(): Promise<{ projects: Array<{ id: string; name: string; description?: string; createdAt: number; createdBy: string; defaultBranch: string }> }> {
+  async listProjects(): Promise<{
+    projects: Array<{
+      id: string;
+      name: string;
+      description?: string;
+      createdAt: number;
+      createdBy: string;
+      defaultBranch: string;
+      /** Если задан — это external (read-only) проект-зеркало с проды. */
+      externalPath?: string;
+    }>;
+  }> {
     return this.request('/api/projects');
   }
 
@@ -367,6 +378,70 @@ export class ApiClient {
       stream.pipe(out);
     });
     return { bytes, saved: destPath };
+  }
+
+  /**
+   * Тянет содержимое файла в память (без записи на диск). Используется для
+   * подсчёта diff'ов в фиде «История изменений». Лимит maxBytes — чтобы не
+   * утянуть случайно гигабайтный лог.
+   */
+  async fetchFileBuffer(
+    projectId: string,
+    pathInRepo: string,
+    ref: string,
+    maxBytes: number,
+  ): Promise<{ buffer: Buffer; truncated: boolean }> {
+    const server = this.mustServer();
+    const token = await this.ensureAccessToken();
+    const qs = new URLSearchParams({ path: pathInRepo, ref });
+    const url =
+      `${server.url.replace(/\/$/, '')}/api/projects/${encodeURIComponent(projectId)}/file/raw?${qs.toString()}`;
+
+    const { pinnedStream } = await import('./tls-pin');
+    const { headers, stream } = await pinnedStream({
+      url,
+      method: 'GET',
+      headers: { authorization: `Bearer ${token}` },
+      fingerprint: server.fingerprint,
+      timeoutMs: 10_000,
+    });
+    if (!headers.status || headers.status < 200 || headers.status >= 300) {
+      throw new Error(`Fetch failed: HTTP ${headers.status}`);
+    }
+    const chunks: Buffer[] = [];
+    let total = 0;
+    let truncated = false;
+    const destroy = () =>
+      (stream as unknown as { destroy?: () => void }).destroy?.();
+    await new Promise<void>((resolve, reject) => {
+      // Доп. защита от подвисшего стрима — общий таймаут на чтение тела.
+      const timer = setTimeout(() => {
+        destroy();
+        reject(new Error(`Fetch body timeout: ${pathInRepo}`));
+      }, 15_000);
+      const finish = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+      stream.on('data', (chunk: Buffer) => {
+        if (truncated) return;
+        if (total + chunk.length > maxBytes) {
+          truncated = true;
+          destroy();
+          finish();
+          return;
+        }
+        total += chunk.length;
+        chunks.push(chunk);
+      });
+      stream.on('error', (e) => {
+        clearTimeout(timer);
+        reject(e);
+      });
+      stream.on('end', finish);
+      stream.on('close', finish);
+    });
+    return { buffer: Buffer.concat(chunks), truncated };
   }
 }
 

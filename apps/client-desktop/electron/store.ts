@@ -26,6 +26,16 @@ interface StoredServer {
   accessExpiresAt: number;
   refreshExpiresAt: number;
   lastConnectedAt?: number;
+  /**
+   * Тип сервера для UI-разделения в сайдбаре:
+   *   'projects' — наш backups-app сервер (двухсторонняя git-синхронизация
+   *                папок проектов). Создаётся через «Создать сервер».
+   *   'prod'     — продакшен-сервер пользователя с лёгким агентом, который
+   *                отдаёт файлы read-only (односторонний mirror). Подключается
+   *                через «Подключиться к проде».
+   * Дефолт 'projects' — все существующие записи это backups-сервера.
+   */
+  kind?: 'projects' | 'prod';
   // sync settings
   syncedFolders: SyncedFolder[];
   externalSyncs?: ExternalSync[];
@@ -43,6 +53,21 @@ export interface ExternalSync {
   lastSyncAt?: number;
   /** Was last sync done with includeHeavy=true */
   lastSyncIncludedHeavy?: boolean;
+  /** Перекрытие глобальных UI-настроек на уровне этого проекта. Каждое
+   *  поле может быть undefined — тогда наследуется значение из глобала. */
+  uiOverrides?: ProjectUiOverrides;
+}
+
+/**
+ * Точечные перекрытия глобальных UI-настроек на уровне проекта. Если ключа
+ * нет — наследуется значение из AppSettings. Если ключ присутствует — это
+ * явное переопределение.
+ */
+export interface ProjectUiOverrides {
+  foldersBottom?: boolean;
+  dataFilesBottom?: boolean;
+  changeFeedAfterSyncOnly?: boolean;
+  changeFeedShowDiff?: boolean;
 }
 
 export interface SyncedFolder {
@@ -68,6 +93,14 @@ interface AppSettings {
   startMinimized: boolean;
   syncDebounceMs: number;
   syncPeriodicMs: number;
+  /** Сортировать папки в самый низ списка (по умолчанию папки сверху). */
+  foldersBottom: boolean;
+  /** Опускать в конец списка всё помеченное «хранилище данных» / исключённое. */
+  dataFilesBottom: boolean;
+  /** В «Истории изменений» показывать только изменения после последней синхронизации. */
+  changeFeedAfterSyncOnly: boolean;
+  /** Считать +/- строк в «Истории изменений» (требует загрузки файлов). */
+  changeFeedShowDiff: boolean;
 }
 
 interface StoreData {
@@ -86,6 +119,10 @@ const DEFAULT_SETTINGS: AppSettings = {
   startMinimized: false,
   syncDebounceMs: 10_000,
   syncPeriodicMs: 2 * 60 * 1000,
+  foldersBottom: true,
+  dataFilesBottom: true,
+  changeFeedAfterSyncOnly: true,
+  changeFeedShowDiff: true,
 };
 
 const DEFAULT_DATA: StoreData = {

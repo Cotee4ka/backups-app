@@ -530,14 +530,35 @@ async function flush(ps: ProjectSync): Promise<void> {
 
     try {
       await g.push('origin', 'main');
-    } catch (e) {
-      // потенциально rejected — попробовать pull --rebase
+    } catch (firstPushErr) {
+      const firstMsg = (firstPushErr as Error).message;
+      // Проверяем, есть ли вообще ветка main на remote. Если нет — recovery
+      // через pull --rebase невозможен (на пустом репо нет ref'а main), и
+      // нужно показать оригинальную ошибку push'а, а не вторичную.
+      let remoteHasMain = false;
+      try {
+        const remoteRefs = await g.listRemote(['--heads', 'origin', 'main']);
+        remoteHasMain = remoteRefs.includes('refs/heads/main');
+      } catch {
+        /* listRemote сам мог упасть — считаем remote недоступным */
+      }
+      if (!remoteHasMain) {
+        // Remote пустой: первый push упал по другой причине (сеть, auth,
+        // таймаут, отвалилась JWT). Surface оригинальную ошибку.
+        ps.state = 'error';
+        emit(ps, { detail: `push failed: ${firstMsg}` });
+        return;
+      }
+      // Remote имеет main → наш push был отвергнут как non-fast-forward,
+      // ребейзимся и пробуем ещё раз.
       try {
         await g.pull('origin', 'main', ['--rebase']);
         await g.push('origin', 'main');
       } catch (e2) {
         ps.state = 'error';
-        emit(ps, { detail: `push failed: ${(e2 as Error).message}` });
+        emit(ps, {
+          detail: `push failed after rebase: ${(e2 as Error).message} (initial: ${firstMsg})`,
+        });
         return;
       }
     }

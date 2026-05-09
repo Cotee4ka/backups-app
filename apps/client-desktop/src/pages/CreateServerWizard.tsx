@@ -3,24 +3,76 @@ import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card';
 import { useAppStore } from '@/store/app-store';
-import { Cloud, KeyRound, Server, ShieldCheck, Copy, ChevronRight, Terminal } from 'lucide-react';
+import {
+  Cloud,
+  KeyRound,
+  Server,
+  ShieldCheck,
+  Copy,
+  ChevronRight,
+  Terminal,
+  Sparkles,
+  Pencil,
+} from 'lucide-react';
 import { copyToClipboard } from '@/lib/utils';
 
 type Step = 'connection' | 'install' | 'done';
+type Mode = 'pair' | 'ssh';
 
 interface InstallLog {
   type: 'stdout' | 'stderr' | 'info';
   line: string;
 }
 
+interface PairPayload {
+  v: number;
+  url: string;
+  fp: string;
+  u: string;
+  pw: string;
+  scriptVersion?: string;
+}
+
+// CreateServerWizard = Mode 1 (Projects, двухсторонняя git-синхронизация).
+// Соответствующий скрипт — install-projects.sh, БЕЗ /host:ro mount.
+const INSTALL_COMMAND =
+  'curl -fsSL https://raw.githubusercontent.com/Cotee4ka/backups-app/main/apps/server/scripts/install-projects.sh | sudo bash -s -- --apply';
+
+function parsePairToken(raw: string): PairPayload | null {
+  let s = raw.trim();
+  if (s.startsWith('bap1.') || s.startsWith('bap2.')) s = s.slice(5);
+  s = s.replace(/-/g, '+').replace(/_/g, '/');
+  while (s.length % 4 !== 0) s += '=';
+  try {
+    const json = atob(s);
+    const obj = JSON.parse(json) as PairPayload;
+    if (!obj.url || !obj.fp || !obj.u || !obj.pw) return null;
+    return obj;
+  } catch {
+    return null;
+  }
+}
+
 export const CreateServerWizard = () => {
   const nav = useNavigate();
   const addToast = useAppStore((s) => s.addToast);
   const refresh = useAppStore((s) => s.refreshServers);
+
+  const [mode, setMode] = React.useState<Mode>('pair');
   const [step, setStep] = React.useState<Step>('connection');
 
+  // Pair-token form state
+  const [token, setToken] = React.useState('');
+
+  // SSH form state
   const [host, setHost] = React.useState('');
   const [port, setPort] = React.useState('22');
   const [user, setUser] = React.useState('root');
@@ -41,12 +93,76 @@ export const CreateServerWizard = () => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
   }, [logs]);
 
+  // Стримим прогресс из installer:* (v2 протокол) — фазы и логи.
   React.useEffect(() => {
-    const off = window.backupsApp.servers.onInstallLog((m) => setLogs((l) => [...l, m]));
+    const off = window.backupsApp.installer.onProgress((p) => {
+      if (p.type === 'phase' && p.phase) {
+        setLogs((l) => [...l, { type: 'info', line: `[${p.phase}]` }]);
+      } else if (p.line) {
+        setLogs((l) => [
+          ...l,
+          { type: p.type as 'stdout' | 'stderr' | 'info', line: p.line! },
+        ]);
+      }
+    });
     return off;
   }, []);
 
-  async function start() {
+  async function startPair() {
+    const parsed = parsePairToken(token);
+    if (!parsed) {
+      addToast({
+        type: 'error',
+        text: 'Неверный pair-токен. Скопируй строку из вывода install-v2.sh.',
+      });
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = (await window.backupsApp.servers.connect({
+        url: parsed.url,
+        username: parsed.u,
+        password: parsed.pw,
+        kind: 'projects',
+      })) as { server: { id: string; url: string; fingerprint: string } };
+
+      // Версия после ручной установки тоже должна совпасть с ожидаемой.
+      const verify = (await window.backupsApp.servers.verifyCurrent(res.server.id)) as
+        | { ok: true }
+        | {
+            ok: false;
+            reason: 'outdated' | 'unreachable';
+            current?: string;
+            expected: string;
+            error?: string;
+          };
+      if (!verify.ok) {
+        await window.backupsApp.servers.delete(res.server.id);
+        await refresh();
+        const msg =
+          verify.reason === 'outdated'
+            ? `Сервер на хосте (${verify.current ?? '?'}) старше ожидаемой версии (${verify.expected}). Перезапусти install-v2.sh последней версией.`
+            : `Сервер недоступен: ${verify.error ?? 'неизвестно'}`;
+        addToast({ type: 'error', text: msg });
+        return;
+      }
+
+      setResult({
+        server: res.server,
+        adminUsername: parsed.u,
+        adminPassword: parsed.pw,
+      });
+      setStep('done');
+      addToast({ type: 'success', text: 'Сервер подключён' });
+      await refresh();
+    } catch (e) {
+      addToast({ type: 'error', text: (e as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function startSsh() {
     if (!host || !user || !password) {
       addToast({ type: 'error', text: 'Заполните все обязательные поля' });
       return;
@@ -55,21 +171,28 @@ export const CreateServerWizard = () => {
     setBusy(true);
     setLogs([]);
     try {
-      const res = (await window.backupsApp.servers.install({
+      // v2-протокол: idempotent install-projects.sh (Mode 1) с фазами,
+      // авто-сохранение сервера и логин по cred'ам из вывода скрипта.
+      const applyRes = (await window.backupsApp.installer.apply({
         sshHost: host.trim(),
         sshPort: Number(port) || 22,
         sshUser: user.trim(),
         sshPassword: password,
         serverPort: Number(serverPort) || 8443,
         adminUser: adminUser.trim() || 'owner',
+        autoConnect: true,
+        kind: 'projects',
       })) as {
+        applied: { serverUrl: string; fingerprint: string; adminUsername: string; adminPassword: string };
         server: { id: string; url: string; fingerprint: string };
         adminUsername: string;
         adminPassword: string;
       };
-      // Version-gate: после успешной установки версия на хосте обязана
-      // совпасть с ожидаемой клиентом. Если нет — это баг релиза (мы ставили
-      // не тот образ). Удаляем сервер из стора и не пускаем дальше.
+      const res = {
+        server: applyRes.server,
+        adminUsername: applyRes.adminUsername,
+        adminPassword: applyRes.adminPassword,
+      };
       const verify = (await window.backupsApp.servers.verifyCurrent(res.server.id)) as
         | { ok: true }
         | {
@@ -95,7 +218,10 @@ export const CreateServerWizard = () => {
       addToast({ type: 'success', text: 'Сервер запущен и подключён' });
       await refresh();
     } catch (e) {
-      addToast({ type: 'error', text: `Ошибка установки: ${(e as Error).message}` });
+      addToast({
+        type: 'error',
+        text: `Ошибка установки: ${(e as Error).message}`,
+      });
       setLogs((l) => [...l, { type: 'stderr', line: (e as Error).message }]);
     } finally {
       setBusy(false);
@@ -113,155 +239,295 @@ export const CreateServerWizard = () => {
           Развернуть сервер на VPS Ubuntu
         </h1>
         <p className="text-sm text-muted-foreground">
-          Через SSH: установит Docker (если нет) и поднимет наш контейнер с Git-сервером.
+          Самый простой и безопасный путь — выполнить одну команду на VPS и
+          вставить полученный pair-токен. Если хочешь полную автоматизацию —
+          вкладка «Через SSH», клиент сам зайдёт и поднимет сервер.
         </p>
       </header>
 
-      <Stepper step={step} />
-
       {step === 'connection' && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Параметры VPS</CardTitle>
-            <CardDescription>SSH-данные нужны только во время установки. Не сохраняются.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid grid-cols-3 gap-3">
-              <div className="col-span-2 space-y-1.5">
-                <Label htmlFor="host">Публичный IP / hostname</Label>
-                <Input id="host" placeholder="203.0.113.42" value={host} onChange={(e) => setHost(e.target.value)} />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="port">SSH порт</Label>
-                <Input id="port" value={port} onChange={(e) => setPort(e.target.value)} />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label htmlFor="user">SSH пользователь</Label>
-                <Input id="user" value={user} onChange={(e) => setUser(e.target.value)} />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="pwd">Пароль (или sudo пароль)</Label>
-                <Input id="pwd" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label htmlFor="sport">Порт сервера приложения</Label>
-                <Input id="sport" value={serverPort} onChange={(e) => setServerPort(e.target.value)} />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="ouser">Имя владельца сервера</Label>
-                <Input id="ouser" value={adminUser} onChange={(e) => setAdminUser(e.target.value)} />
-              </div>
-            </div>
+        <>
+          <div className="flex gap-2">
+            <Button
+              variant={mode === 'pair' ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => setMode('pair')}
+            >
+              <Sparkles className="h-4 w-4" />
+              Pair-токен (рекомендуется)
+            </Button>
+            <Button
+              variant={mode === 'ssh' ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => setMode('ssh')}
+            >
+              <Pencil className="h-4 w-4" />
+              Через SSH
+            </Button>
+          </div>
 
-            <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
-              <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
-              <div>
-                <strong className="text-foreground">Безопасность.</strong> Пароль используется один раз для
-                запуска install.sh и не сохраняется. После установки клиент закрепит SHA-256 fingerprint
-                сертификата (TLS pinning).
-              </div>
-            </div>
+          {mode === 'pair' ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>Pair-токен</CardTitle>
+                <CardDescription>
+                  Запусти команду на чистой Ubuntu — она поставит Docker, поднимет
+                  контейнер и напечатает токен. Вставь его сюда.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="rounded-lg border-2 border-dashed border-border bg-muted/20 p-3 space-y-2">
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <Terminal className="h-3.5 w-3.5 shrink-0" />
+                    <span>Выполнить на VPS по SSH:</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <code className="flex-1 rounded bg-background/60 px-3 py-2 font-mono text-[11px] text-foreground/80 break-all">
+                      {INSTALL_COMMAND}
+                    </code>
+                    <button
+                      className="shrink-0 rounded p-2 hover:bg-accent transition-colors"
+                      title="Скопировать"
+                      onClick={() => copyToClipboard(INSTALL_COMMAND)}
+                    >
+                      <Copy className="h-3.5 w-3.5 text-muted-foreground" />
+                    </button>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground">
+                    Команда идемпотентная — её можно прогонять много раз, ничего не
+                    сломается. Существующие креды (`.env`) сохранятся.
+                  </p>
+                </div>
 
-            <div className="flex justify-end gap-2 pt-2">
-              <Button variant="ghost" onClick={() => nav(-1)}>Отмена</Button>
-              <Button variant="gradient" onClick={start}>
-                Развернуть <ChevronRight className="h-4 w-4" />
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+                <div className="space-y-1.5">
+                  <Label htmlFor="tok">Pair-токен из вывода скрипта</Label>
+                  <textarea
+                    id="tok"
+                    className="flex min-h-[112px] w-full resize-y rounded-md border border-input bg-background px-3 py-2 font-mono text-xs shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                    placeholder="bap2.eyJ2IjoyLCJ1cmwiOiJodHRwczovLy4uLiJ9"
+                    value={token}
+                    onChange={(e) => setToken(e.target.value)}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    В токене зашиты адрес сервера, TLS fingerprint, логин и пароль
+                    владельца. Креды сохранятся локально и зашифруются.
+                  </p>
+                </div>
+
+                <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+                  <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
+                  <div>
+                    <strong className="text-foreground">
+                      TLS pinning + version-gate.
+                    </strong>{' '}
+                    После входа клиент проверит версию серверной части. Если хост
+                    окажется старше ожидаемого — внутрь не пустит, сервер удалится
+                    из списка.
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-2 pt-2">
+                  <Button variant="ghost" onClick={() => nav(-1)}>
+                    Отмена
+                  </Button>
+                  <Button
+                    variant="gradient"
+                    onClick={startPair}
+                    disabled={busy || !token.trim()}
+                  >
+                    {busy ? 'Подключаемся…' : 'Подключиться'}{' '}
+                    <ChevronRight className="h-4 w-4" />
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          ) : (
+            <Card>
+              <CardHeader>
+                <CardTitle>Параметры VPS</CardTitle>
+                <CardDescription>
+                  SSH-данные нужны только во время установки. Не сохраняются.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="col-span-2 space-y-1.5">
+                    <Label htmlFor="host">Публичный IP / hostname</Label>
+                    <Input
+                      id="host"
+                      placeholder="203.0.113.42"
+                      value={host}
+                      onChange={(e) => setHost(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="port">SSH порт</Label>
+                    <Input
+                      id="port"
+                      value={port}
+                      onChange={(e) => setPort(e.target.value)}
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="user">SSH пользователь</Label>
+                    <Input
+                      id="user"
+                      value={user}
+                      onChange={(e) => setUser(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="pwd">Пароль (или sudo пароль)</Label>
+                    <Input
+                      id="pwd"
+                      type="password"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="sport">Порт сервера приложения</Label>
+                    <Input
+                      id="sport"
+                      value={serverPort}
+                      onChange={(e) => setServerPort(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="ouser">Имя владельца сервера</Label>
+                    <Input
+                      id="ouser"
+                      value={adminUser}
+                      onChange={(e) => setAdminUser(e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+                  <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
+                  <div>
+                    <strong className="text-foreground">Безопасность.</strong>{' '}
+                    Пароль используется один раз для запуска install-v2.sh и не
+                    сохраняется. После установки клиент закрепит SHA-256
+                    fingerprint сертификата (TLS pinning).
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-2 pt-2">
+                  <Button variant="ghost" onClick={() => nav(-1)}>
+                    Отмена
+                  </Button>
+                  <Button variant="gradient" onClick={startSsh}>
+                    Развернуть <ChevronRight className="h-4 w-4" />
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+        </>
       )}
 
       {step === 'install' && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Terminal className="h-5 w-5" /> Установка
-            </CardTitle>
-            <CardDescription>
-              Лог установки. Не закрывайте окно до завершения.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div
-              ref={logRef}
-              className="h-96 overflow-y-auto rounded-lg border border-border bg-black/60 p-4 font-mono text-xs"
-            >
-              {logs.length === 0 && <div className="text-muted-foreground">Подключение к серверу…</div>}
-              {logs.map((l, i) => (
-                <div
-                  key={i}
-                  className={
-                    l.type === 'stderr'
-                      ? 'text-amber-300/90'
-                      : l.type === 'info'
-                      ? 'accent-fg'
-                      : 'text-foreground/90'
-                  }
-                >
-                  <span className="mr-2 text-muted-foreground">›</span>
-                  {l.line}
-                </div>
-              ))}
-            </div>
-            {busy && (
-              <div className="mt-4 flex items-center gap-2 text-xs text-muted-foreground">
-                <span className="h-2 w-2 animate-pulse rounded-full bg-violet-400" />
-                идёт установка, может занять до пары минут…
+        <>
+          <Stepper step={step} />
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Terminal className="h-5 w-5" /> Установка
+              </CardTitle>
+              <CardDescription>
+                Лог установки. Не закрывайте окно до завершения.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div
+                ref={logRef}
+                className="h-96 overflow-y-auto rounded-lg border border-border bg-black/60 p-4 font-mono text-xs"
+              >
+                {logs.length === 0 && (
+                  <div className="text-muted-foreground">Подключение к серверу…</div>
+                )}
+                {logs.map((l, i) => (
+                  <div
+                    key={i}
+                    className={
+                      l.type === 'stderr'
+                        ? 'text-amber-300/90'
+                        : l.type === 'info'
+                          ? 'accent-fg'
+                          : 'text-foreground/90'
+                    }
+                  >
+                    <span className="mr-2 text-muted-foreground">›</span>
+                    {l.line}
+                  </div>
+                ))}
               </div>
-            )}
-          </CardContent>
-        </Card>
+              {busy && (
+                <div className="mt-4 flex items-center gap-2 text-xs text-muted-foreground">
+                  <span className="h-2 w-2 animate-pulse rounded-full bg-violet-400" />
+                  идёт установка, может занять до пары минут…
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </>
       )}
 
       {step === 'done' && result && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <ShieldCheck className="h-5 w-5 text-emerald-400" /> Сервер готов
-            </CardTitle>
-            <CardDescription>
-              Сохраните пароль владельца — без него вы не сможете войти повторно.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <Field
-              label="Адрес сервера"
-              icon={<Server className="accent-fg h-4 w-4" />}
-              value={result.server.url}
-            />
-            <Field
-              label="TLS fingerprint"
-              icon={<ShieldCheck className="h-4 w-4 text-emerald-400" />}
-              value={result.server.fingerprint}
-              mono
-            />
-            <Field
-              label="Логин владельца"
-              icon={<Cloud className="accent-fg h-4 w-4" />}
-              value={result.adminUsername}
-            />
-            <Field
-              label="Пароль владельца"
-              icon={<KeyRound className="h-4 w-4 text-amber-300" />}
-              value={result.adminPassword}
-              mono
-              important
-            />
-            <div className="flex justify-end gap-2 pt-2">
-              <Button variant="outline" onClick={() => nav('/dashboard')}>
-                На главную
-              </Button>
-              <Button variant="gradient" onClick={() => nav(`/server/${result.server.id}`)}>
-                Открыть сервер <ChevronRight className="h-4 w-4" />
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+        <>
+          <Stepper step={step} />
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <ShieldCheck className="h-5 w-5 text-emerald-400" /> Сервер готов
+              </CardTitle>
+              <CardDescription>
+                Сохраните пароль владельца — без него вы не сможете войти повторно.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <Field
+                label="Адрес сервера"
+                icon={<Server className="accent-fg h-4 w-4" />}
+                value={result.server.url}
+              />
+              <Field
+                label="TLS fingerprint"
+                icon={<ShieldCheck className="h-4 w-4 text-emerald-400" />}
+                value={result.server.fingerprint}
+                mono
+              />
+              <Field
+                label="Логин владельца"
+                icon={<Cloud className="accent-fg h-4 w-4" />}
+                value={result.adminUsername}
+              />
+              <Field
+                label="Пароль владельца"
+                icon={<KeyRound className="h-4 w-4 text-amber-300" />}
+                value={result.adminPassword}
+                mono
+                important
+              />
+              <div className="flex justify-end gap-2 pt-2">
+                <Button variant="outline" onClick={() => nav('/dashboard')}>
+                  На главную
+                </Button>
+                <Button
+                  variant="gradient"
+                  onClick={() => nav(`/server/${result.server.id}`)}
+                >
+                  Открыть сервер <ChevronRight className="h-4 w-4" />
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </>
       )}
     </div>
   );
@@ -289,14 +555,18 @@ const Stepper = ({ step }: { step: Step }) => {
             <span
               className={
                 'grid h-5 w-5 place-items-center rounded-full text-[10px] ' +
-                (i <= activeIdx ? 'accent-icon text-white' : 'bg-muted text-muted-foreground')
+                (i <= activeIdx
+                  ? 'accent-icon text-white'
+                  : 'bg-muted text-muted-foreground')
               }
             >
               {i + 1}
             </span>
             {it.label}
           </div>
-          {i < items.length - 1 && <ChevronRight className="h-3 w-3 text-muted-foreground" />}
+          {i < items.length - 1 && (
+            <ChevronRight className="h-3 w-3 text-muted-foreground" />
+          )}
         </React.Fragment>
       ))}
     </div>
@@ -326,7 +596,9 @@ const Field = ({
       {icon}
       <div className="min-w-0 flex-1">
         <div className="text-xs text-muted-foreground">{label}</div>
-        <div className={'truncate text-sm ' + (mono ? 'font-mono' : '')}>{value}</div>
+        <div className={'truncate text-sm ' + (mono ? 'font-mono' : '')}>
+          {value}
+        </div>
       </div>
     </div>
     <Button size="sm" variant="ghost" onClick={() => copyToClipboard(value)}>
