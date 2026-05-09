@@ -102,6 +102,7 @@ export const ProjectPage = () => {
   const [inviteUsername, setInviteUsername] = React.useState('');
   const [inviteRole, setInviteRole] = React.useState('member');
   const [deleteOpen, setDeleteOpen] = React.useState(false);
+  const [deleteLocalFolder, setDeleteLocalFolder] = React.useState(false);
 
   React.useEffect(() => {
     if (!server) return;
@@ -524,17 +525,60 @@ export const ProjectPage = () => {
 
       {/* Удаление проекта — необратимое действие, требует ручного ввода
           фразы «ПОДТВЕРДИТЬ». Сервер удалит bare-репо, клиент остановит
-          watcher и почистит syncedFolders. */}
+          watcher и почистит syncedFolders + externalSyncs. Локальная папка
+          удаляется опционально по чекбоксу. */}
       <ConfirmDestructiveDialog
         open={deleteOpen}
-        onClose={() => setDeleteOpen(false)}
+        onClose={() => {
+          setDeleteOpen(false);
+          setDeleteLocalFolder(false);
+        }}
         title="Удалить проект"
         description={`«${project?.name ?? 'Без имени'}» — все бекапы и git-история будут удалены безвозвратно с сервера и из клиента.`}
         subjectLabel={project?.name}
-        confirmButtonLabel="Удалить навсегда"
+        confirmButtonLabel={
+          deleteLocalFolder ? 'Удалить навсегда + локальную папку' : 'Удалить навсегда'
+        }
+        extraContent={
+          (synced?.localPath || isExternal) && (
+            <div className="rounded-lg border border-border bg-muted/20 p-3 space-y-2">
+              <label className="flex items-start gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="mt-0.5 h-4 w-4 cursor-pointer accent-red-500"
+                  checked={deleteLocalFolder}
+                  onChange={(e) => setDeleteLocalFolder(e.target.checked)}
+                />
+                <div className="flex-1 space-y-0.5">
+                  <div className="text-sm font-medium text-foreground">
+                    Также удалить локальную папку
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    {synced?.localPath ? (
+                      <>
+                        Будет физически удалена папка{' '}
+                        <code className="font-mono">{synced.localPath}</code> со
+                        всеми файлами на твоём ПК.
+                      </>
+                    ) : (
+                      'Будет удалена локальная зеркальная папка проекта.'
+                    )}
+                  </div>
+                </div>
+              </label>
+            </div>
+          )
+        }
         onConfirm={async () => {
-          await window.backupsApp.projects.delete(serverId, projectId);
-          addToast({ type: 'success', text: 'Проект удалён' });
+          await window.backupsApp.projects.delete(serverId, projectId, {
+            deleteLocalFolder,
+          });
+          addToast({
+            type: 'success',
+            text: deleteLocalFolder
+              ? 'Проект и локальная папка удалены'
+              : 'Проект удалён',
+          });
           nav(`/server/${serverId}`);
         }}
       />

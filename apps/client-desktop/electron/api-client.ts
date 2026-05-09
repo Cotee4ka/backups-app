@@ -170,8 +170,10 @@ export class ApiClient {
     }>(`/api/host/browse?${qs.toString()}`);
   }
 
-  async deleteProject(projectId: string) {
-    return this.request(`/api/projects/${encodeURIComponent(projectId)}`, { method: 'DELETE' });
+  async deleteProject(projectId: string): Promise<{ ok: boolean }> {
+    return this.request<{ ok: boolean }>(`/api/projects/${encodeURIComponent(projectId)}`, {
+      method: 'DELETE',
+    });
   }
 
   async history(projectId: string, limit = 100) {

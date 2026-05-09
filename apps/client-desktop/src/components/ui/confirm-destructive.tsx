@@ -18,6 +18,8 @@ interface Props {
   confirmPhrase?: string;
   /** Текст кнопки удаления. По умолчанию «Удалить навсегда». */
   confirmButtonLabel?: string;
+  /** Дополнительный JSX между warning'ом и полем ввода (например, чекбоксы опций). */
+  extraContent?: React.ReactNode;
   /** Колбэк удаления. Если бросит — модалка останется открытой и покажет ошибку. */
   onConfirm: () => Promise<void> | void;
 }
@@ -37,6 +39,7 @@ export const ConfirmDestructiveDialog = ({
   subjectLabel,
   confirmPhrase = 'ПОДТВЕРДИТЬ',
   confirmButtonLabel = 'Удалить навсегда',
+  extraContent,
   onConfirm,
 }: Props) => {
   const [typed, setTyped] = React.useState('');
@@ -94,6 +97,8 @@ export const ConfirmDestructiveDialog = ({
             )}
           </div>
         </div>
+
+        {extraContent}
 
         <div className="space-y-1.5">
           <Label htmlFor="confirm-phrase">
