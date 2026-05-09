@@ -2,6 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
+import { promises as fsPromises } from 'node:fs';
 import AutoLaunch from 'auto-launch';
 import {
   EXPECTED_SERVER_VERSION,
@@ -661,20 +662,55 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       return store.getExternalSync(params.serverId, params.projectId);
     },
   );
-  ipcMain.handle('projects:delete', async (_e, { serverId, projectId }) => {
-    // Останавливаем активную синхронизацию (если есть), чистим watcher'ы.
-    try {
-      const sync = await ensureSyncEngine();
-      await sync.stopSync(serverId, projectId);
-      unsubscribeProject(serverId, projectId);
-    } catch {
-      /* sync мог быть не активен — это ок */
-    }
-    // Чистим локальную запись о синхронизированной папке.
-    getServerStore().removeSyncedFolder(serverId, projectId);
-    // Дёргаем серверный delete — он же удалит bare repo через deleteRepo().
-    return new ApiClient(serverId).deleteProject(projectId);
-  });
+  ipcMain.handle(
+    'projects:delete',
+    async (
+      _e,
+      {
+        serverId,
+        projectId,
+        deleteLocalFolder,
+      }: { serverId: string; projectId: string; deleteLocalFolder?: boolean },
+    ) => {
+      // Сначала запоминаем путь до локальной папки — после removeSyncedFolder
+      // мы его уже не достанем. Берём из syncedFolders или из externalSyncs.
+      const store = getServerStore();
+      const srv = store.getServer(serverId);
+      const synced = srv?.syncedFolders.find((f) => f.projectId === projectId);
+      const ext = srv?.externalSyncs?.find((e) => e.projectId === projectId);
+      const localPath = synced?.localPath || ext?.localPath || null;
+
+      // Останавливаем активную синхронизацию (если есть), чистим watcher'ы.
+      try {
+        const sync = await ensureSyncEngine();
+        await sync.stopSync(serverId, projectId);
+        unsubscribeProject(serverId, projectId);
+      } catch {
+        /* sync мог быть не активен — это ок */
+      }
+      // Локальные записи: и обычный sync, и external read-only.
+      store.removeSyncedFolder(serverId, projectId);
+      store.removeExternalSync(serverId, projectId);
+
+      // Серверный delete: удалит row + project_members (cascade) + bare repo.
+      const apiResult = await new ApiClient(serverId).deleteProject(projectId);
+
+      // Опционально rm -rf локальной папки. Делаем последним, чтобы если
+      // юзер сказал «и локально тоже» — мы уже точно отвязали watcher.
+      let localFolderRemoved = false;
+      if (deleteLocalFolder && localPath) {
+        try {
+          await fsPromises.rm(localPath, { recursive: true, force: true });
+          localFolderRemoved = true;
+        } catch (e) {
+          // Не валим всю операцию — серверная часть уже удалена.
+          console.warn('failed to remove local folder', localPath, e);
+        }
+      }
+
+      return { ...apiResult, localFolderRemoved };
+    },
+  );
   ipcMain.handle('projects:history', async (_e, { serverId, projectId, limit }) => {
     return new ApiClient(serverId).history(projectId, limit ?? 100);
   });

@@ -101,8 +101,12 @@ const api = {
       ipcRenderer.invoke('projects:createExternal', { serverId, name, hostPath, description }),
     browseHost: (serverId: string, hostPath: string) =>
       ipcRenderer.invoke('projects:browseHost', { serverId, hostPath }),
-    delete: (serverId: string, projectId: string) =>
-      ipcRenderer.invoke('projects:delete', { serverId, projectId }),
+    delete: (serverId: string, projectId: string, opts?: { deleteLocalFolder?: boolean }) =>
+      ipcRenderer.invoke('projects:delete', {
+        serverId,
+        projectId,
+        deleteLocalFolder: opts?.deleteLocalFolder ?? false,
+      }),
     history: (serverId: string, projectId: string, limit?: number) =>
       ipcRenderer.invoke('projects:history', { serverId, projectId, limit }),
     commit: (serverId: string, projectId: string, sha: string) =>
