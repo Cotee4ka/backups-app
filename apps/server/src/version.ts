@@ -12,8 +12,8 @@
  *
  * Соглашение: бампаем синхронно с SERVER_VERSION в одном релизе.
  */
-export const SERVER_VERSION = '0.4.0';
-export const INSTALL_SCRIPT_VERSION = '0.4.0';
+export const SERVER_VERSION = '0.4.1';
+export const INSTALL_SCRIPT_VERSION = '0.4.1';
 
 /**
  * Список фич, которые добавлялись в этой версии и в более ранних. Клиент
@@ -27,4 +27,5 @@ export const SERVER_FEATURES = [
   'version',
   'junk-dirs', // 0.3.0: tree-recursive прунит node_modules / .git / dist по умолчанию
   'install-v2', // 0.4.0: идемпотентный install-v2.sh + явный version-gate в клиенте
+  'unbuffered-git-push', // 0.4.1: фикс «push >1 MB → Connection reset» (no-op content-type parsers)
 ] as const;
