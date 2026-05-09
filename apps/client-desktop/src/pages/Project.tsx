@@ -50,6 +50,7 @@ import {
   ServerOutdatedModal,
   useServerVersionGate,
 } from '@/components/server-outdated-modal';
+import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive';
 
 interface CommitInfo {
   sha: string;
@@ -100,6 +101,7 @@ export const ProjectPage = () => {
   const [addMemberOpen, setAddMemberOpen] = React.useState(false);
   const [inviteUsername, setInviteUsername] = React.useState('');
   const [inviteRole, setInviteRole] = React.useState('member');
+  const [deleteOpen, setDeleteOpen] = React.useState(false);
 
   React.useEffect(() => {
     if (!server) return;
@@ -428,20 +430,7 @@ export const ProjectPage = () => {
                 title="Удалить проект"
                 description="Удаляет проект и все его бекапы на сервере. Безвозвратно."
                 action={
-                  <Button
-                    variant="destructive"
-                    onClick={async () => {
-                      if (!confirm(`Удалить проект «${project?.name}» вместе со всей историей?`))
-                        return;
-                      try {
-                        await window.backupsApp.projects.delete(serverId, projectId);
-                        addToast({ type: 'success', text: 'Проект удалён' });
-                        nav(`/server/${serverId}`);
-                      } catch (e) {
-                        addToast({ type: 'error', text: (e as Error).message });
-                      }
-                    }}
-                  >
+                  <Button variant="destructive" onClick={() => setDeleteOpen(true)}>
                     Удалить
                   </Button>
                 }
@@ -530,6 +519,23 @@ export const ProjectPage = () => {
         onUpdated={() => {
           gate.refetch();
           void load();
+        }}
+      />
+
+      {/* Удаление проекта — необратимое действие, требует ручного ввода
+          фразы «ПОДТВЕРДИТЬ». Сервер удалит bare-репо, клиент остановит
+          watcher и почистит syncedFolders. */}
+      <ConfirmDestructiveDialog
+        open={deleteOpen}
+        onClose={() => setDeleteOpen(false)}
+        title="Удалить проект"
+        description={`«${project?.name ?? 'Без имени'}» — все бекапы и git-история будут удалены безвозвратно с сервера и из клиента.`}
+        subjectLabel={project?.name}
+        confirmButtonLabel="Удалить навсегда"
+        onConfirm={async () => {
+          await window.backupsApp.projects.delete(serverId, projectId);
+          addToast({ type: 'success', text: 'Проект удалён' });
+          nav(`/server/${serverId}`);
         }}
       />
     </div>
