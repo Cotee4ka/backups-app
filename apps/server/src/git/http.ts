@@ -23,16 +23,20 @@ import { broadcastToProject } from '../ws/hub.js';
  */
 
 export async function gitHttpRoutes(app: FastifyInstance): Promise<void> {
-  app.addContentTypeParser(
-    'application/x-git-upload-pack-request',
-    { parseAs: 'buffer' },
-    (_req, body, done) => done(null, body),
-  );
-  app.addContentTypeParser(
-    'application/x-git-receive-pack-request',
-    { parseAs: 'buffer' },
-    (_req, body, done) => done(null, body),
-  );
+  // ВАЖНО: НЕ буферизируем тело git-запросов в память. Раньше тут стоял
+  // `parseAs: 'buffer'`, что упирало большие push'ы в дефолтный bodyLimit
+  // Fastify (1 MB) — у юзера 230 MB push получал «Connection reset» прямо
+  // на этом месте.
+  //
+  // Хэндлер делает `req.raw.pipe(child.stdin)` для git http-backend —
+  // т.е. обрабатывает stream напрямую без копий. Регистрируем no-op
+  // парсеры (Fastify иначе вернёт 415), которые не трогают payload, и
+  // тело течёт прямо к git-у.
+  const noopParser: import('fastify').FastifyContentTypeParser = (_req, _payload, done) => {
+    done(null, undefined);
+  };
+  app.addContentTypeParser('application/x-git-upload-pack-request', noopParser);
+  app.addContentTypeParser('application/x-git-receive-pack-request', noopParser);
 
   const handler = async (
     req: import('fastify').FastifyRequest,
