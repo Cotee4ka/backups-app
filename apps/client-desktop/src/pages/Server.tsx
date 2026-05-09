@@ -274,9 +274,16 @@ export const ServerPage = () => {
             </CardDescription>
           </div>
           <div className="flex items-center gap-2">
-            <Button variant="outline" onClick={openAttach}>
-              <HardDrive className="h-4 w-4" /> Подключить папку с сервера
-            </Button>
+            {/* Подключение папки с проды доступно только на Mode 2 серверах:
+                там docker-compose монтирует / → /host:ro в контейнер. На Mode 1
+                (двухсторонняя git-синхронизация) хостовая ФС в контейнере
+                недоступна — показывать кнопку бессмысленно, она бы просто
+                возвращала «Path does not exist». */}
+            {server.kind === 'prod' && (
+              <Button variant="outline" onClick={openAttach}>
+                <HardDrive className="h-4 w-4" /> Подключить папку с сервера
+              </Button>
+            )}
             <Button variant="gradient" onClick={() => setCreateOpen(true)}>
               <Plus className="h-4 w-4" /> Новый проект
             </Button>

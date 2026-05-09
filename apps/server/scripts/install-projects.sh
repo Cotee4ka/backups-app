@@ -28,7 +28,7 @@
 
 set -euo pipefail
 
-INSTALL_SCRIPT_VERSION="0.4.1"
+INSTALL_SCRIPT_VERSION="0.4.2"
 INSTALL_MODE="projects"
 
 # --- defaults ---
@@ -219,6 +219,13 @@ if [[ -n "$HOST_MOUNT" ]]; then
   HOST_MOUNT_LINE="      - $HOST_MOUNT"
 fi
 
+# Mode 1 worktree-mirror: на хосте создаём /srv/projects и bind-mount'им в
+# контейнер по пути /data/worktrees. После каждого push'а пост-receive хук
+# обновит соответствующую папку проекта — юзер по SSH сможет `cd /srv/projects`
+# и видеть актуальные файлы (не bare git, а реальные сурсы).
+mkdir -p /srv/projects
+chmod 755 /srv/projects
+
 cat > "$INSTALL_DIR/docker-compose.yml" <<EOF
 services:
   backups-app-server:
@@ -234,6 +241,7 @@ services:
       - "$PORT:8443"
     volumes:
       - backups-data:/data
+      - /srv/projects:/data/worktrees
 $HOST_MOUNT_LINE
 
 volumes:

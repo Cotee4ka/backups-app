@@ -34,7 +34,7 @@
 
 set -euo pipefail
 
-INSTALL_SCRIPT_VERSION="0.4.1"
+INSTALL_SCRIPT_VERSION="0.4.2"
 
 # --- defaults ---
 MODE=""
