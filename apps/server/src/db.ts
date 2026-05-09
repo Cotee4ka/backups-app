@@ -73,9 +73,13 @@ export function getDb(): Database.Database {
       expires_at INTEGER NOT NULL,
       used_by TEXT,
       used_at INTEGER,
+      project_id TEXT,
+      revoked INTEGER NOT NULL DEFAULT 0,
       FOREIGN KEY (created_by) REFERENCES users(id),
-      FOREIGN KEY (used_by) REFERENCES users(id)
+      FOREIGN KEY (used_by) REFERENCES users(id),
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
     );
+    CREATE INDEX IF NOT EXISTS idx_invites_project ON invites(project_id);
   `);
 
   // Дроп старой таблицы локов (была введена в 0.5.0 для координации Claude-агентов,
@@ -88,6 +92,19 @@ export function getDb(): Database.Database {
   if (!projectCols.some((c) => c.name === 'external_path')) {
     db.exec(`ALTER TABLE projects ADD COLUMN external_path TEXT`);
   }
+
+  // 0.7.0: invites привязываются к проекту опционально + revoked-флаг.
+  // Для существующих БД делаем ALTER, новые БД получают сразу через CREATE выше.
+  const inviteCols = db
+    .prepare(`PRAGMA table_info(invites)`)
+    .all() as { name: string }[];
+  if (!inviteCols.some((c) => c.name === 'project_id')) {
+    db.exec(`ALTER TABLE invites ADD COLUMN project_id TEXT`);
+  }
+  if (!inviteCols.some((c) => c.name === 'revoked')) {
+    db.exec(`ALTER TABLE invites ADD COLUMN revoked INTEGER NOT NULL DEFAULT 0`);
+  }
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_invites_project ON invites(project_id);`);
 
   _db = db;
   return db;

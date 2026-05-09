@@ -208,6 +208,66 @@ export class ApiClient {
     });
   }
 
+  async removeMember(projectId: string, userId: string) {
+    return this.request<{ ok: boolean }>(
+      `/api/projects/${encodeURIComponent(projectId)}/members/${encodeURIComponent(userId)}`,
+      { method: 'DELETE' },
+    );
+  }
+
+  async setMemberRole(projectId: string, userId: string, role: string) {
+    return this.request<{ ok: boolean }>(
+      `/api/projects/${encodeURIComponent(projectId)}/members/${encodeURIComponent(userId)}`,
+      { method: 'PATCH', body: { role } },
+    );
+  }
+
+  async createProjectInvite(
+    projectId: string,
+    body: { role: 'admin' | 'member' | 'viewer'; ttlSec: number },
+  ) {
+    return this.request<{
+      code: string;
+      expiresAt: number;
+      role: 'admin' | 'member' | 'viewer';
+      projectId: string;
+      projectName: string;
+    }>(`/api/projects/${encodeURIComponent(projectId)}/invites`, {
+      method: 'POST',
+      body,
+    });
+  }
+
+  async listProjectInvites(projectId: string) {
+    return this.request<{
+      invites: Array<{
+        code: string;
+        role: string;
+        expiresAt: number;
+        usedBy: string | null;
+        usedByUsername: string | null;
+        usedAt: number | null;
+        revoked: number;
+        createdBy: string;
+        createdByUsername: string | null;
+      }>;
+    }>(`/api/projects/${encodeURIComponent(projectId)}/invites`);
+  }
+
+  async revokeInvite(code: string) {
+    return this.request<{ ok: boolean }>(
+      `/api/invites/${encodeURIComponent(code)}`,
+      { method: 'DELETE' },
+    );
+  }
+
+  async acceptInvite(code: string) {
+    return this.request<{ ok: boolean; projectId: string; role: string }>(
+      `/api/invites/${encodeURIComponent(code)}/accept`,
+      { method: 'POST', body: {} },
+    );
+  }
+
   async audit(opts: { projectId?: string; userId?: string; limit?: number } = {}) {
     const qs = new URLSearchParams();
     if (opts.projectId) qs.set('projectId', opts.projectId);
@@ -475,6 +535,37 @@ export async function loginToServer(params: {
   return JSON.parse(res.body.toString('utf8'));
 }
 
+/**
+ * Получить публичную информацию об инвайте без авторизации. Используется
+ * UI до подключения, чтобы показать «Вас приглашают в проект X с ролью Y».
+ * Если инвайт revoked / expired / used — сервер вернёт 410, проверяем по
+ * статусу.
+ */
+export async function fetchInviteInfo(params: {
+  url: string;
+  fingerprint: string;
+  code: string;
+}): Promise<{
+  code: string;
+  role: string;
+  expiresAt: number;
+  projectId: string | null;
+  projectName: string | null;
+}> {
+  const res = await pinnedRequest({
+    url: `${params.url.replace(/\/$/, '')}/api/invites/${encodeURIComponent(params.code)}/info`,
+    method: 'GET',
+    headers: {},
+    fingerprint: params.fingerprint,
+    timeoutMs: 15_000,
+  });
+  const body = res.body.length ? JSON.parse(res.body.toString('utf8')) : null;
+  if (res.status < 200 || res.status >= 300) {
+    throw new ServerApiError(res.status, body);
+  }
+  return body;
+}
+
 export async function registerOnServer(params: {
   url: string;
   fingerprint: string;
@@ -489,6 +580,7 @@ export async function registerOnServer(params: {
     accessExpiresAt: number;
     refreshExpiresAt: number;
   };
+  joinedProjectId?: string | null;
 }> {
   const res = await pinnedRequest({
     url: `${params.url.replace(/\/$/, '')}/api/auth/register`,

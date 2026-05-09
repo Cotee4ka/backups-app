@@ -9,7 +9,7 @@ import {
   EXPECTED_INSTALL_SCRIPT_VERSION,
 } from '@backups-app/shared';
 import { getServerStore, type StoredServer } from './store';
-import { ApiClient, loginToServer, registerOnServer } from './api-client';
+import { ApiClient, loginToServer, registerOnServer, fetchInviteInfo } from './api-client';
 import {
   disconnectAll,
   ensureConnection,
@@ -727,6 +727,196 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   ipcMain.handle('projects:addMember', async (_e, { serverId, projectId, username, role }) => {
     return new ApiClient(serverId).addMember(projectId, username, role);
   });
+  ipcMain.handle(
+    'projects:removeMember',
+    async (
+      _e,
+      { serverId, projectId, userId }: { serverId: string; projectId: string; userId: string },
+    ) => {
+      return new ApiClient(serverId).removeMember(projectId, userId);
+    },
+  );
+  ipcMain.handle(
+    'projects:setMemberRole',
+    async (
+      _e,
+      {
+        serverId,
+        projectId,
+        userId,
+        role,
+      }: {
+        serverId: string;
+        projectId: string;
+        userId: string;
+        role: 'admin' | 'member' | 'viewer';
+      },
+    ) => {
+      return new ApiClient(serverId).setMemberRole(projectId, userId, role);
+    },
+  );
+
+  // ---------- Invite links (per-project & server-level) ----------
+  /**
+   * Создаёт project-invite на сервере и сразу собирает строку-токен `bapi.…`
+   * для копирования в UI. Токен включает url+fingerprint текущего сервера —
+   * друг сможет подключиться без предварительной настройки.
+   */
+  ipcMain.handle(
+    'invites:createProject',
+    async (
+      _e,
+      params: {
+        serverId: string;
+        projectId: string;
+        role: 'admin' | 'member' | 'viewer';
+        ttlSec: number;
+      },
+    ) => {
+      const server = getServerStore().getServer(params.serverId);
+      if (!server) throw new Error('Server not found');
+      const r = await new ApiClient(params.serverId).createProjectInvite(
+        params.projectId,
+        { role: params.role, ttlSec: params.ttlSec },
+      );
+      // Собираем токен прямо в main, чтобы renderer не лез в base64-логику.
+      const json = JSON.stringify({
+        v: 1,
+        url: server.url,
+        fp: server.fingerprint,
+        code: r.code,
+        role: r.role,
+        projectName: r.projectName,
+      });
+      const b64 = Buffer.from(json, 'utf8')
+        .toString('base64')
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .replace(/=+$/, '');
+      const token = `bapi.${b64}`;
+      return {
+        code: r.code,
+        token,
+        expiresAt: r.expiresAt,
+        role: r.role,
+        projectId: r.projectId,
+        projectName: r.projectName,
+      };
+    },
+  );
+  ipcMain.handle(
+    'invites:listProject',
+    async (_e, { serverId, projectId }: { serverId: string; projectId: string }) => {
+      return new ApiClient(serverId).listProjectInvites(projectId);
+    },
+  );
+  ipcMain.handle(
+    'invites:revoke',
+    async (_e, { serverId, code }: { serverId: string; code: string }) => {
+      return new ApiClient(serverId).revokeInvite(code);
+    },
+  );
+  ipcMain.handle(
+    'invites:accept',
+    async (_e, { serverId, code }: { serverId: string; code: string }) => {
+      return new ApiClient(serverId).acceptInvite(code);
+    },
+  );
+  /**
+   * Прочитать публичную информацию об инвайте без авторизации. Для UI до
+   * подключения: «Вас приглашают в проект X с ролью member».
+   */
+  ipcMain.handle(
+    'invites:info',
+    async (_e, { url, fingerprint, code }: { url: string; fingerprint: string; code: string }) => {
+      return fetchInviteInfo({ url, fingerprint, code });
+    },
+  );
+  /**
+   * Подключиться к серверу по invite-токену: регистрирует нового юзера с
+   * указанным кодом, после чего сервер автоматически добавляет его в проект
+   * (логика в /auth/register). Сохраняем нового StoredServer и возвращаем
+   * joinedProjectId для редиректа.
+   */
+  ipcMain.handle(
+    'servers:joinByInvite',
+    async (
+      _e,
+      params: {
+        url: string;
+        fingerprint: string;
+        code: string;
+        username: string;
+        password: string;
+      },
+    ) => {
+      const url = params.url.replace(/\/$/, '');
+      const origin = new URL(url).origin;
+      // Если уже есть сервер с таким origin — login + accept-invite (юзер
+      // уже зарегистрирован), иначе register.
+      const store = getServerStore();
+      const existing = store.listServers().find((s) => s.origin === origin);
+      let auth: Awaited<ReturnType<typeof registerOnServer>>;
+      if (existing) {
+        auth = await loginToServer({
+          url,
+          fingerprint: params.fingerprint,
+          username: params.username,
+          password: params.password,
+        });
+        // Поднимаем валидный access — accept-invite требует Bearer.
+        // Сохраним токены сразу в store, чтобы ApiClient мог их использовать.
+        const updated: StoredServer = {
+          ...existing,
+          accessToken: auth.tokens.accessToken,
+          refreshToken: auth.tokens.refreshToken,
+          accessExpiresAt: auth.tokens.accessExpiresAt,
+          refreshExpiresAt: auth.tokens.refreshExpiresAt,
+          username: auth.user.username,
+          lastConnectedAt: Date.now(),
+        };
+        store.upsertServer(updated);
+        const acc = await new ApiClient(updated.id).acceptInvite(params.code);
+        ensureConnection(updated.id);
+        return {
+          server: stripSecrets(updated),
+          joinedProjectId: acc.projectId,
+        };
+      } else {
+        auth = await registerOnServer({
+          url,
+          fingerprint: params.fingerprint,
+          username: params.username,
+          password: params.password,
+          inviteCode: params.code,
+        });
+        const stored: StoredServer = {
+          id: crypto.randomUUID(),
+          name: new URL(url).hostname,
+          url,
+          origin,
+          fingerprint: params.fingerprint,
+          username: auth.user.username,
+          accessToken: auth.tokens.accessToken,
+          refreshToken: auth.tokens.refreshToken,
+          accessExpiresAt: auth.tokens.accessExpiresAt,
+          refreshExpiresAt: auth.tokens.refreshExpiresAt,
+          lastConnectedAt: Date.now(),
+          // По умолчанию инвайт ведёт в Mode 1 (двусторонний синк).
+          // Если на сервере есть внешние проекты — auto-detect позже
+          // переключит в 'prod'.
+          kind: 'projects',
+          syncedFolders: [],
+        };
+        store.upsertServer(stored);
+        ensureConnection(stored.id);
+        return {
+          server: stripSecrets(stored),
+          joinedProjectId: auth.joinedProjectId ?? null,
+        };
+      }
+    },
+  );
 
   // ---------- File browser ----------
   ipcMain.handle(

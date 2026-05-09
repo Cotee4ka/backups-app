@@ -619,4 +619,156 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
       .run(params.id, u.id, body.role, Date.now());
     return reply.send({ ok: true });
   });
+
+  // Сменить роль мембера. Owner проекта (или server-owner) может менять
+  // всех. Admin не может тронуть owner'а проекта. Owner проекта менять
+  // нельзя через эту ручку — тот кто создал проект, тем и остаётся.
+  app.patch('/projects/:id/members/:userId', async (req, reply) => {
+    const me = await requireAuth(req);
+    const params = z
+      .object({ id: z.string(), userId: z.string() })
+      .parse(req.params);
+    const body = z
+      .object({ role: z.enum(['admin', 'member', 'viewer']) })
+      .parse(req.body);
+
+    const myRole = getDb()
+      .prepare(`SELECT role FROM project_members WHERE project_id = ? AND user_id = ?`)
+      .get(params.id, me.id) as { role: string } | undefined;
+    const targetRole = getDb()
+      .prepare(`SELECT role FROM project_members WHERE project_id = ? AND user_id = ?`)
+      .get(params.id, params.userId) as { role: string } | undefined;
+    if (!targetRole) return reply.code(404).send({ error: 'Member not found' });
+    if (targetRole.role === 'owner') {
+      return reply.code(403).send({ error: 'Cannot change project owner role' });
+    }
+    const isProjectOwner = myRole?.role === 'owner';
+    const isProjectAdmin = myRole?.role === 'admin';
+    const isServerOwner = me.role === 'owner';
+    if (!isProjectOwner && !isProjectAdmin && !isServerOwner) {
+      return reply.code(403).send({ error: 'Forbidden' });
+    }
+
+    getDb()
+      .prepare(
+        `UPDATE project_members SET role = ? WHERE project_id = ? AND user_id = ?`,
+      )
+      .run(body.role, params.id, params.userId);
+    return reply.send({ ok: true });
+  });
+
+  // Удалить мембера из проекта. Те же правила что и PATCH; owner'а удалять
+  // нельзя через эту ручку (для удаления нужно удалить весь проект).
+  app.delete('/projects/:id/members/:userId', async (req, reply) => {
+    const me = await requireAuth(req);
+    const params = z
+      .object({ id: z.string(), userId: z.string() })
+      .parse(req.params);
+
+    const myRole = getDb()
+      .prepare(`SELECT role FROM project_members WHERE project_id = ? AND user_id = ?`)
+      .get(params.id, me.id) as { role: string } | undefined;
+    const targetRole = getDb()
+      .prepare(`SELECT role FROM project_members WHERE project_id = ? AND user_id = ?`)
+      .get(params.id, params.userId) as { role: string } | undefined;
+    if (!targetRole) return reply.code(404).send({ error: 'Member not found' });
+    if (targetRole.role === 'owner') {
+      return reply.code(403).send({ error: 'Cannot remove project owner' });
+    }
+    const isProjectOwner = myRole?.role === 'owner';
+    const isProjectAdmin = myRole?.role === 'admin';
+    const isServerOwner = me.role === 'owner';
+    // Также позволим юзеру самому покинуть проект.
+    const isSelf = params.userId === me.id;
+    if (!isProjectOwner && !isProjectAdmin && !isServerOwner && !isSelf) {
+      return reply.code(403).send({ error: 'Forbidden' });
+    }
+
+    getDb()
+      .prepare(`DELETE FROM project_members WHERE project_id = ? AND user_id = ?`)
+      .run(params.id, params.userId);
+    return reply.send({ ok: true });
+  });
+
+  // Создать инвайт-ссылку для приглашения нового мембера в проект.
+  // role — какая роль будет у новичка после регистрации/принятия инвайта.
+  // ttlSec — срок действия. Дефолт 7 дней.
+  app.post('/projects/:id/invites', async (req, reply) => {
+    const me = await requireAuth(req);
+    const params = z.object({ id: z.string() }).parse(req.params);
+    const body = z
+      .object({
+        role: z.enum(['admin', 'member', 'viewer']).default('member'),
+        ttlSec: z
+          .number()
+          .min(60)
+          .max(60 * 60 * 24 * 30)
+          .default(60 * 60 * 24 * 7),
+      })
+      .parse(req.body);
+
+    const myRole = getDb()
+      .prepare(`SELECT role FROM project_members WHERE project_id = ? AND user_id = ?`)
+      .get(params.id, me.id) as { role: string } | undefined;
+    if (
+      (!myRole || (myRole.role !== 'owner' && myRole.role !== 'admin')) &&
+      me.role !== 'owner'
+    ) {
+      return reply.code(403).send({ error: 'Forbidden' });
+    }
+
+    const project = getDb()
+      .prepare(`SELECT id, name FROM projects WHERE id = ?`)
+      .get(params.id) as { id: string; name: string } | undefined;
+    if (!project) return reply.code(404).send({ error: 'Project not found' });
+
+    const code = nanoid(20);
+    const expiresAt = Date.now() + body.ttlSec * 1000;
+    getDb()
+      .prepare(
+        `INSERT INTO invites (code, created_by, role, expires_at, project_id)
+         VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(code, me.id, body.role, expiresAt, params.id);
+
+    return reply.send({
+      code,
+      expiresAt,
+      role: body.role,
+      projectId: project.id,
+      projectName: project.name,
+    });
+  });
+
+  // Список инвайтов проекта — для UI «активные приглашения».
+  app.get('/projects/:id/invites', async (req, reply) => {
+    const me = await requireAuth(req);
+    const params = z.object({ id: z.string() }).parse(req.params);
+
+    const myRole = getDb()
+      .prepare(`SELECT role FROM project_members WHERE project_id = ? AND user_id = ?`)
+      .get(params.id, me.id) as { role: string } | undefined;
+    if (
+      (!myRole || (myRole.role !== 'owner' && myRole.role !== 'admin')) &&
+      me.role !== 'owner'
+    ) {
+      return reply.code(403).send({ error: 'Forbidden' });
+    }
+
+    const rows = getDb()
+      .prepare(
+        `SELECT i.code, i.role, i.expires_at as expiresAt,
+                i.used_by as usedBy, i.used_at as usedAt, i.revoked,
+                u.username as usedByUsername,
+                creator.username as createdByUsername,
+                i.created_by as createdBy
+         FROM invites i
+         LEFT JOIN users u ON u.id = i.used_by
+         LEFT JOIN users creator ON creator.id = i.created_by
+         WHERE i.project_id = ?
+         ORDER BY i.expires_at DESC LIMIT 100`,
+      )
+      .all(params.id);
+    return reply.send({ invites: rows });
+  });
 }

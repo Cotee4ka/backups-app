@@ -43,6 +43,8 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
 
       const isFirstUser = countUsers() === 0;
       let role: 'owner' | 'admin' | 'member' = 'member';
+      let inviteProjectId: string | null = null;
+      let inviteProjectRole: 'admin' | 'member' | 'viewer' | null = null;
 
       if (isFirstUser) {
         role = 'owner';
@@ -52,16 +54,38 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         }
         const invite = getDb()
           .prepare(
-            `SELECT code, role, expires_at, used_by FROM invites WHERE code = ?`,
+            `SELECT code, role, expires_at, used_by, project_id, revoked
+             FROM invites WHERE code = ?`,
           )
           .get(body.inviteCode) as
-          | { code: string; role: 'admin' | 'member' | 'viewer'; expires_at: number; used_by: string | null }
+          | {
+              code: string;
+              role: 'admin' | 'member' | 'viewer';
+              expires_at: number;
+              used_by: string | null;
+              project_id: string | null;
+              revoked: number;
+            }
           | undefined;
 
-        if (!invite || invite.used_by || invite.expires_at < Date.now()) {
+        if (!invite || invite.revoked || invite.expires_at < Date.now()) {
           return reply.code(403).send({ error: 'Invalid or expired invite code' });
         }
-        role = invite.role === 'viewer' ? 'member' : invite.role;
+        // Server-level инвайт — одноразовый. Project-level инвайт тоже
+        // делаем одноразовым, чтобы каждый пришедший мембер был трекаем.
+        if (invite.used_by) {
+          return reply.code(403).send({ error: 'Invite already used' });
+        }
+        // Сервеная роль для нового аккаунта: project-level инвайт всегда
+        // даёт серверную роль member (даже если в проекте будет admin),
+        // чтобы не приходил со стороны полный server-admin доступ.
+        if (invite.project_id) {
+          role = 'member';
+          inviteProjectId = invite.project_id;
+          inviteProjectRole = invite.role;
+        } else {
+          role = invite.role === 'viewer' ? 'member' : invite.role;
+        }
       }
 
       const hash = await hashPassword(body.password);
@@ -71,12 +95,24 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         getDb()
           .prepare(`UPDATE invites SET used_by = ?, used_at = ? WHERE code = ?`)
           .run(user.id, Date.now(), body.inviteCode!);
+
+        // Project-level инвайт — сразу добавляем в мемберы проекта.
+        if (inviteProjectId && inviteProjectRole) {
+          getDb()
+            .prepare(
+              `INSERT OR IGNORE INTO project_members (project_id, user_id, role, joined_at)
+               VALUES (?, ?, ?, ?)`,
+            )
+            .run(inviteProjectId, user.id, inviteProjectRole, Date.now());
+        }
       }
 
       const tokens = await issueTokens(app, user);
       return reply.send({
         user: { id: user.id, username: user.username, role: user.role, createdAt: Date.now() },
         tokens,
+        // Если инвайт был project-level — клиент сразу откроет проект.
+        joinedProjectId: inviteProjectId,
       });
     },
   });

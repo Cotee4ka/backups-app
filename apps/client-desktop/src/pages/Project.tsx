@@ -42,6 +42,10 @@ import {
   Search,
   X,
   Paperclip,
+  Link2,
+  Copy,
+  Check,
+  Trash2,
 } from 'lucide-react';
 import { Spinner, DotsLoader } from '@/components/ui/spinner';
 import { isHeavyPath } from '@/lib/heavy-files';
@@ -103,6 +107,33 @@ export const ProjectPage = () => {
   const [inviteRole, setInviteRole] = React.useState('member');
   const [deleteOpen, setDeleteOpen] = React.useState(false);
   const [deleteLocalFolder, setDeleteLocalFolder] = React.useState(false);
+
+  // Invite-by-link state. См. lib/invite-token.ts — клиент сразу получает
+  // готовый `bapi.…` токен от main и просто кладёт в буфер обмена.
+  const [inviteLinkOpen, setInviteLinkOpen] = React.useState(false);
+  const [inviteLinkRole, setInviteLinkRole] = React.useState<'admin' | 'member' | 'viewer'>(
+    'member',
+  );
+  const [inviteLinkTtlSec, setInviteLinkTtlSec] = React.useState<number>(7 * 24 * 60 * 60);
+  const [inviteLinkResult, setInviteLinkResult] = React.useState<{
+    token: string;
+    expiresAt: number;
+    role: string;
+  } | null>(null);
+  const [inviteLinkBusy, setInviteLinkBusy] = React.useState(false);
+  const [inviteCopied, setInviteCopied] = React.useState(false);
+  const [activeInvites, setActiveInvites] = React.useState<
+    Array<{
+      code: string;
+      role: string;
+      expiresAt: number;
+      usedBy: string | null;
+      usedByUsername: string | null;
+      usedAt: number | null;
+      revoked: number;
+      createdByUsername: string | null;
+    }>
+  >([]);
 
   React.useEffect(() => {
     if (!server) return;
@@ -201,6 +232,90 @@ export const ProjectPage = () => {
       const m = (await window.backupsApp.projects.members(serverId, projectId)) as { members: MemberRow[] };
       setMembers(m.members);
       addToast({ type: 'success', text: 'Участник добавлен' });
+    } catch (e) {
+      addToast({ type: 'error', text: (e as Error).message });
+    }
+  }
+
+  async function loadActiveInvites() {
+    if (isExternal) return; // на проде нет смысла
+    try {
+      const r = await window.backupsApp.invites.listProject(serverId, projectId);
+      setActiveInvites(r.invites);
+    } catch {
+      setActiveInvites([]);
+    }
+  }
+
+  React.useEffect(() => {
+    if (tab === 'members') void loadActiveInvites();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, serverId, projectId]);
+
+  async function createInviteLink() {
+    setInviteLinkBusy(true);
+    setInviteCopied(false);
+    try {
+      const r = await window.backupsApp.invites.createProject({
+        serverId,
+        projectId,
+        role: inviteLinkRole,
+        ttlSec: inviteLinkTtlSec,
+      });
+      setInviteLinkResult({
+        token: r.token,
+        expiresAt: r.expiresAt,
+        role: r.role,
+      });
+      void loadActiveInvites();
+    } catch (e) {
+      addToast({ type: 'error', text: (e as Error).message });
+    } finally {
+      setInviteLinkBusy(false);
+    }
+  }
+
+  async function copyInviteToken() {
+    if (!inviteLinkResult) return;
+    try {
+      await navigator.clipboard.writeText(inviteLinkResult.token);
+      setInviteCopied(true);
+      window.setTimeout(() => setInviteCopied(false), 1500);
+    } catch (e) {
+      addToast({ type: 'error', text: 'Не удалось скопировать: ' + (e as Error).message });
+    }
+  }
+
+  async function revokeInviteLink(code: string) {
+    try {
+      await window.backupsApp.invites.revoke(serverId, code);
+      void loadActiveInvites();
+      addToast({ type: 'success', text: 'Приглашение отозвано' });
+    } catch (e) {
+      addToast({ type: 'error', text: (e as Error).message });
+    }
+  }
+
+  async function removeMember(userId: string, username: string) {
+    if (!confirm(`Удалить участника ${username} из проекта?`)) return;
+    try {
+      await window.backupsApp.projects.removeMember(serverId, projectId, userId);
+      const m = (await window.backupsApp.projects.members(serverId, projectId)) as { members: MemberRow[] };
+      setMembers(m.members);
+      addToast({ type: 'success', text: 'Участник удалён' });
+    } catch (e) {
+      addToast({ type: 'error', text: (e as Error).message });
+    }
+  }
+
+  async function changeMemberRole(
+    userId: string,
+    newRole: 'admin' | 'member' | 'viewer',
+  ) {
+    try {
+      await window.backupsApp.projects.setMemberRole(serverId, projectId, userId, newRole);
+      const m = (await window.backupsApp.projects.members(serverId, projectId)) as { members: MemberRow[] };
+      setMembers(m.members);
     } catch (e) {
       addToast({ type: 'error', text: (e as Error).message });
     }
@@ -384,33 +499,118 @@ export const ProjectPage = () => {
       )}
 
       {tab === 'members' && (
-        <Card>
-          <CardHeader className="flex-row items-center justify-between gap-3">
-            <div>
-              <CardTitle>Участники</CardTitle>
-              <CardDescription>Кто имеет доступ к проекту.</CardDescription>
-            </div>
-            <Button variant="gradient" onClick={() => setAddMemberOpen(true)}>
-              <Plus className="h-4 w-4" /> Добавить
-            </Button>
-          </CardHeader>
-          <CardContent>
-            <ul className="divide-y divide-border">
-              {members.map((m) => (
-                <li key={m.userId} className="flex items-center gap-4 py-3">
-                  <div className="grid h-9 w-9 place-items-center rounded-full bg-muted/40 text-xs font-semibold">
-                    {m.username.slice(0, 1).toUpperCase()}
-                  </div>
-                  <div className="flex-1">
-                    <div className="text-sm font-medium">{m.username}</div>
-                    <div className="text-xs text-muted-foreground">с {formatRelativeTime(m.joinedAt)}</div>
-                  </div>
-                  <Badge variant={m.role === 'owner' ? 'success' : 'secondary'}>{m.role}</Badge>
-                </li>
-              ))}
-            </ul>
-          </CardContent>
-        </Card>
+        <div className="space-y-4">
+          <Card>
+            <CardHeader className="flex-row items-center justify-between gap-3">
+              <div>
+                <CardTitle>Участники</CardTitle>
+                <CardDescription>Кто имеет доступ к проекту.</CardDescription>
+              </div>
+              <div className="flex gap-2">
+                {!isExternal && (
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setInviteLinkResult(null);
+                      setInviteCopied(false);
+                      setInviteLinkOpen(true);
+                    }}
+                  >
+                    <Link2 className="h-4 w-4" /> Пригласить ссылкой
+                  </Button>
+                )}
+                <Button variant="gradient" onClick={() => setAddMemberOpen(true)}>
+                  <Plus className="h-4 w-4" /> Добавить
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <ul className="divide-y divide-border">
+                {members.map((m) => (
+                  <li key={m.userId} className="flex items-center gap-4 py-3">
+                    <div className="grid h-9 w-9 place-items-center rounded-full bg-muted/40 text-xs font-semibold">
+                      {m.username.slice(0, 1).toUpperCase()}
+                    </div>
+                    <div className="flex-1">
+                      <div className="text-sm font-medium">{m.username}</div>
+                      <div className="text-xs text-muted-foreground">
+                        с {formatRelativeTime(m.joinedAt)}
+                      </div>
+                    </div>
+                    {m.role === 'owner' ? (
+                      <Badge variant="success">owner</Badge>
+                    ) : (
+                      <>
+                        <select
+                          value={m.role}
+                          onChange={(e) =>
+                            void changeMemberRole(
+                              m.userId,
+                              e.target.value as 'admin' | 'member' | 'viewer',
+                            )
+                          }
+                          className="h-8 rounded-md border border-input bg-background/40 px-2 text-xs focus-ring"
+                        >
+                          <option value="admin">admin</option>
+                          <option value="member">member</option>
+                          <option value="viewer">viewer</option>
+                        </select>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          title="Удалить из проекта"
+                          onClick={() => void removeMember(m.userId, m.username)}
+                        >
+                          <Trash2 className="h-4 w-4 text-rose-400/80" />
+                        </Button>
+                      </>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </CardContent>
+          </Card>
+
+          {!isExternal && activeInvites.filter((i) => !i.usedBy && !i.revoked).length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">Активные приглашения</CardTitle>
+                <CardDescription>
+                  Ссылки которые ещё не использованы. Можно отозвать в любой момент.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ul className="divide-y divide-border">
+                  {activeInvites
+                    .filter((i) => !i.usedBy && !i.revoked && i.expiresAt > Date.now())
+                    .map((i) => (
+                      <li key={i.code} className="flex items-center gap-4 py-3 text-sm">
+                        <Link2 className="h-4 w-4 shrink-0 text-muted-foreground" />
+                        <div className="min-w-0 flex-1">
+                          <code className="block truncate font-mono text-xs">
+                            …{i.code.slice(-12)}
+                          </code>
+                          <div className="text-xs text-muted-foreground">
+                            роль <strong>{i.role}</strong> · истекает{' '}
+                            {formatRelativeTime(i.expiresAt)}
+                            {i.createdByUsername ? ` · от ${i.createdByUsername}` : ''}
+                          </div>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          title="Отозвать приглашение"
+                          onClick={() => void revokeInviteLink(i.code)}
+                        >
+                          <X className="h-4 w-4 text-rose-400/80" />
+                        </Button>
+                      </li>
+                    ))}
+                </ul>
+              </CardContent>
+            </Card>
+          )}
+        </div>
       )}
 
       {tab === 'settings' && (
@@ -508,6 +708,102 @@ export const ProjectPage = () => {
             <Button variant="gradient" onClick={addMember}>Добавить</Button>
           </div>
         </div>
+      </Dialog>
+
+      <Dialog
+        open={inviteLinkOpen}
+        onClose={() => {
+          setInviteLinkOpen(false);
+          setInviteLinkResult(null);
+        }}
+        title="Пригласить ссылкой"
+        description="Создаётся одноразовая ссылка. Друг вставит её в приложение и сразу попадёт в проект."
+      >
+        {inviteLinkResult ? (
+          <div className="space-y-4">
+            <div className="rounded-lg border border-emerald-400/30 bg-emerald-400/5 p-3 text-xs text-emerald-200">
+              Ссылка готова. Скопируйте и отправьте другу любым способом —
+              мессенджер, email. Срок действия:{' '}
+              {formatRelativeTime(inviteLinkResult.expiresAt)}.
+            </div>
+            <div className="space-y-1.5">
+              <Label>Приглашение</Label>
+              <textarea
+                readOnly
+                value={inviteLinkResult.token}
+                className="flex min-h-[88px] w-full resize-y rounded-md border border-input bg-background px-3 py-2 font-mono text-xs shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                onClick={(e) => (e.target as HTMLTextAreaElement).select()}
+              />
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setInviteLinkResult(null);
+                  setInviteCopied(false);
+                }}
+              >
+                Создать ещё
+              </Button>
+              <Button variant="gradient" onClick={() => void copyInviteToken()}>
+                {inviteCopied ? (
+                  <>
+                    <Check className="h-4 w-4" /> Скопировано
+                  </>
+                ) : (
+                  <>
+                    <Copy className="h-4 w-4" /> Скопировать
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="ilr">Роль приглашаемого</Label>
+              <select
+                id="ilr"
+                value={inviteLinkRole}
+                onChange={(e) =>
+                  setInviteLinkRole(e.target.value as 'admin' | 'member' | 'viewer')
+                }
+                className="flex h-10 w-full rounded-md border border-input bg-background/40 px-3 text-sm focus-ring"
+              >
+                <option value="admin">admin — может управлять проектом и участниками</option>
+                <option value="member">member — может пушить и тянуть</option>
+                <option value="viewer">viewer — только чтение</option>
+              </select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="ilt">Срок действия</Label>
+              <select
+                id="ilt"
+                value={String(inviteLinkTtlSec)}
+                onChange={(e) => setInviteLinkTtlSec(Number(e.target.value))}
+                className="flex h-10 w-full rounded-md border border-input bg-background/40 px-3 text-sm focus-ring"
+              >
+                <option value={String(60 * 60)}>1 час</option>
+                <option value={String(24 * 60 * 60)}>24 часа</option>
+                <option value={String(7 * 24 * 60 * 60)}>7 дней</option>
+                <option value={String(30 * 24 * 60 * 60)}>30 дней</option>
+              </select>
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="ghost" onClick={() => setInviteLinkOpen(false)}>
+                Отмена
+              </Button>
+              <Button
+                variant="gradient"
+                onClick={() => void createInviteLink()}
+                disabled={inviteLinkBusy}
+              >
+                {inviteLinkBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                Создать ссылку
+              </Button>
+            </div>
+          </div>
+        )}
       </Dialog>
 
       {/* Version-gate: блокируем работу с проектом, если хост устарел. */}

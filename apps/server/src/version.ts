@@ -12,8 +12,8 @@
  *
  * Соглашение: бампаем синхронно с SERVER_VERSION в одном релизе.
  */
-export const SERVER_VERSION = '0.6.0';
-export const INSTALL_SCRIPT_VERSION = '0.6.0';
+export const SERVER_VERSION = '0.7.0';
+export const INSTALL_SCRIPT_VERSION = '0.7.0';
 
 /**
  * Список фич, которые добавлялись в этой версии и в более ранних. Клиент
@@ -30,4 +30,5 @@ export const SERVER_FEATURES = [
   'unbuffered-git-push', // 0.4.1: фикс «push >1 MB → Connection reset» (no-op content-type parsers)
   'worktree-mirror', // 0.4.2: post-receive hook + worktree-зеркала в /srv/projects на хосте
   'tree-last-author', // 0.6.0: в /tree у каждой entry есть lastCommit — кто и когда последний раз менял файл
+  'project-invite-links', // 0.7.0: project-level invite-ссылки + remove/setRole мемберов
 ] as const;

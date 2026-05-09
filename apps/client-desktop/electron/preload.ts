@@ -117,6 +117,14 @@ const api = {
       ipcRenderer.invoke('projects:members', { serverId, projectId }),
     addMember: (serverId: string, projectId: string, username: string, role: string) =>
       ipcRenderer.invoke('projects:addMember', { serverId, projectId, username, role }),
+    removeMember: (serverId: string, projectId: string, userId: string) =>
+      ipcRenderer.invoke('projects:removeMember', { serverId, projectId, userId }),
+    setMemberRole: (
+      serverId: string,
+      projectId: string,
+      userId: string,
+      role: 'admin' | 'member' | 'viewer',
+    ) => ipcRenderer.invoke('projects:setMemberRole', { serverId, projectId, userId, role }),
     tree: (serverId: string, projectId: string, pathInRepo = '', ref = 'HEAD') =>
       ipcRenderer.invoke('projects:tree', { serverId, projectId, path: pathInRepo, ref }),
     fileHistory: (serverId: string, projectId: string, pathInRepo: string, limit = 100) =>
@@ -262,6 +270,75 @@ const api = {
         ipcRenderer.removeListener('sync:status', sub);
       };
     },
+  },
+  // ---------- Invites (project-level link invites) ----------
+  invites: {
+    /**
+     * Создаёт project-invite на сервере и возвращает готовую строку-токен
+     * `bapi.…` для отдачи другу. UI просто copy-to-clipboard.
+     */
+    createProject: (params: {
+      serverId: string;
+      projectId: string;
+      role: 'admin' | 'member' | 'viewer';
+      ttlSec: number;
+    }) =>
+      ipcRenderer.invoke('invites:createProject', params) as Promise<{
+        code: string;
+        token: string;
+        expiresAt: number;
+        role: 'admin' | 'member' | 'viewer';
+        projectId: string;
+        projectName: string;
+      }>,
+    listProject: (serverId: string, projectId: string) =>
+      ipcRenderer.invoke('invites:listProject', { serverId, projectId }) as Promise<{
+        invites: Array<{
+          code: string;
+          role: string;
+          expiresAt: number;
+          usedBy: string | null;
+          usedByUsername: string | null;
+          usedAt: number | null;
+          revoked: number;
+          createdBy: string;
+          createdByUsername: string | null;
+        }>;
+      }>,
+    revoke: (serverId: string, code: string) =>
+      ipcRenderer.invoke('invites:revoke', { serverId, code }) as Promise<{
+        ok: boolean;
+      }>,
+    accept: (serverId: string, code: string) =>
+      ipcRenderer.invoke('invites:accept', { serverId, code }) as Promise<{
+        ok: boolean;
+        projectId: string;
+        role: string;
+      }>,
+    /**
+     * Прочитать публичную инфу об инвайте до подключения. Используется при
+     * вставке `bapi.…` токена в ConnectServerWizard, чтобы показать «Вас
+     * приглашают в проект X с ролью Y».
+     */
+    info: (params: { url: string; fingerprint: string; code: string }) =>
+      ipcRenderer.invoke('invites:info', params) as Promise<{
+        code: string;
+        role: string;
+        expiresAt: number;
+        projectId: string | null;
+        projectName: string | null;
+      }>,
+    joinByInvite: (params: {
+      url: string;
+      fingerprint: string;
+      code: string;
+      username: string;
+      password: string;
+    }) =>
+      ipcRenderer.invoke('servers:joinByInvite', params) as Promise<{
+        server: { id: string; name: string; url: string };
+        joinedProjectId: string | null;
+      }>,
   },
   // ---------- Live updates from server (relayed from WS) ----------
   events: {
