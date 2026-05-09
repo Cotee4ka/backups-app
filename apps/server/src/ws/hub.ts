@@ -8,6 +8,9 @@ import type {
   RepoUpdatedMessage,
   ProjectRestoredMessage,
   ProjectDeletedMessage,
+  LockAcquiredMessage,
+  LockHeartbeatMessage,
+  LockReleasedMessage,
 } from '@backups-app/shared';
 import { WS_PATH } from '@backups-app/shared';
 import type { AccessTokenPayload } from '../auth.js';
@@ -27,7 +30,13 @@ let wss: WebSocketServer | null = null;
 
 export function broadcastToProject(
   projectId: string,
-  msg: RepoUpdatedMessage | ProjectRestoredMessage | ProjectDeletedMessage,
+  msg:
+    | RepoUpdatedMessage
+    | ProjectRestoredMessage
+    | ProjectDeletedMessage
+    | LockAcquiredMessage
+    | LockHeartbeatMessage
+    | LockReleasedMessage,
   exceptUserId?: string,
 ): void {
   const subs = projectIndex.get(projectId);

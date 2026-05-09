@@ -259,6 +259,27 @@ const api = {
       };
     },
   },
+  // ---------- Project lock (Claude/human coordination) ----------
+  lock: {
+    get: (serverId: string, projectId: string) =>
+      ipcRenderer.invoke('lock:get', { serverId, projectId }),
+    acquire: (params: {
+      serverId: string;
+      projectId: string;
+      reason?: string;
+      ttlSec?: number;
+      force?: boolean;
+    }) => ipcRenderer.invoke('lock:acquire', params),
+    heartbeat: (params: {
+      serverId: string;
+      projectId: string;
+      ttlSec?: number;
+      currentlyEditing?: string[];
+      reason?: string;
+    }) => ipcRenderer.invoke('lock:heartbeat', params),
+    release: (params: { serverId: string; projectId: string; summary?: string }) =>
+      ipcRenderer.invoke('lock:release', params),
+  },
   // ---------- Live updates from server (relayed from WS) ----------
   events: {
     on: (
@@ -268,7 +289,10 @@ const api = {
         | 'project:deleted'
         | 'presence:join'
         | 'presence:leave'
-        | 'presence:list',
+        | 'presence:list'
+        | 'lock:acquired'
+        | 'lock:heartbeat'
+        | 'lock:released',
       cb: (payload: unknown) => void,
     ) => {
       const channel = `event:${event}`;

@@ -12,8 +12,8 @@
  *
  * Соглашение: бампаем синхронно с SERVER_VERSION в одном релизе.
  */
-export const SERVER_VERSION = '0.4.2';
-export const INSTALL_SCRIPT_VERSION = '0.4.2';
+export const SERVER_VERSION = '0.5.0';
+export const INSTALL_SCRIPT_VERSION = '0.5.0';
 
 /**
  * Список фич, которые добавлялись в этой версии и в более ранних. Клиент
@@ -29,4 +29,5 @@ export const SERVER_FEATURES = [
   'install-v2', // 0.4.0: идемпотентный install-v2.sh + явный version-gate в клиенте
   'unbuffered-git-push', // 0.4.1: фикс «push >1 MB → Connection reset» (no-op content-type parsers)
   'worktree-mirror', // 0.4.2: post-receive hook + worktree-зеркала в /srv/projects на хосте
+  'project-locks', // 0.5.0: координация Claude/людей через лок с heartbeat и WS-broadcast
 ] as const;

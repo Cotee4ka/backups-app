@@ -176,6 +176,42 @@ export class ApiClient {
     });
   }
 
+  // ---------- Project lock (Claude / human coordination) ----------
+
+  async getProjectLock(projectId: string): Promise<{ lock: unknown }> {
+    return this.request(`/api/projects/${encodeURIComponent(projectId)}/lock`);
+  }
+
+  async acquireProjectLock(
+    projectId: string,
+    body: { reason?: string; ttlSec?: number; force?: boolean },
+  ): Promise<{ ok: boolean; acquired: boolean; lock?: unknown }> {
+    return this.request(`/api/projects/${encodeURIComponent(projectId)}/lock`, {
+      method: 'POST',
+      body,
+    });
+  }
+
+  async heartbeatProjectLock(
+    projectId: string,
+    body: { ttlSec?: number; currentlyEditing?: string[]; reason?: string },
+  ): Promise<{ ok: boolean; lock: unknown }> {
+    return this.request(
+      `/api/projects/${encodeURIComponent(projectId)}/lock/heartbeat`,
+      { method: 'POST', body },
+    );
+  }
+
+  async releaseProjectLock(
+    projectId: string,
+    body: { summary?: string },
+  ): Promise<{ ok: boolean; released: boolean }> {
+    return this.request(
+      `/api/projects/${encodeURIComponent(projectId)}/lock/release`,
+      { method: 'POST', body },
+    );
+  }
+
   async history(projectId: string, limit = 100) {
     return this.request<{ commits: unknown[] }>(
       `/api/projects/${encodeURIComponent(projectId)}/history?limit=${limit}`,
