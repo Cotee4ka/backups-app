@@ -28,7 +28,7 @@
 
 set -euo pipefail
 
-INSTALL_SCRIPT_VERSION="0.4.2"
+INSTALL_SCRIPT_VERSION="0.5.0"
 INSTALL_MODE="projects"
 
 # --- defaults ---

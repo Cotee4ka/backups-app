@@ -8,6 +8,7 @@ import { ensureRepo } from './repo.js';
 import { getDb } from '../db.js';
 import type { AccessTokenPayload } from '../auth.js';
 import { broadcastToProject } from '../ws/hub.js';
+import { recordLockSessionFiles } from '../routes/locks.js';
 
 /**
  * Smart-HTTP git endpoint: GET /git/:projectId/info/refs?service=...
@@ -127,7 +128,7 @@ interface RequestCtx {
   projectId: string;
 }
 
-function runGitHttpBackend(
+async function runGitHttpBackend(
   req: IncomingMessage,
   res: ServerResponse,
   repoPath: string,
@@ -135,6 +136,11 @@ function runGitHttpBackend(
   query: Record<string, string | undefined>,
   ctx: RequestCtx,
 ): Promise<void> {
+  // Снимаем HEAD ДО запуска git-receive-pack, чтобы потом посчитать
+  // дельту: какие файлы реально пришли в этом push'е. Используется для
+  // session_files активного lock'а — ждущий агент видит «трогали то-то».
+  const prevHead =
+    subpath === 'git-receive-pack' ? await readHeadSafe(repoPath) : null;
   return new Promise((resolve) => {
     const env = {
       ...process.env,
@@ -210,15 +216,54 @@ function runGitHttpBackend(
       // post-receive: если был git-receive-pack успешный — оповещаем подписчиков.
       if (subpath === 'git-receive-pack') {
         // читаем актуальный HEAD (асинхронно, не блокируя ответ)
-        readHeadSafe(repoPath).then((sha) => {
+        readHeadSafe(repoPath).then(async (sha) => {
           if (!sha) return;
+
+          // Считаем список файлов, которые пришли в этом push'е, чтобы
+          // дописать в session_files активного lock'а (если есть).
+          let pushedFiles: string[] = [];
+          if (prevHead && prevHead !== sha) {
+            try {
+              const { simpleGit } = await import('simple-git');
+              const g = simpleGit({ baseDir: repoPath });
+              const out = await g.raw([
+                'diff',
+                '--name-only',
+                `${prevHead}..${sha}`,
+              ]);
+              pushedFiles = out
+                .split('\n')
+                .map((s) => s.trim())
+                .filter(Boolean);
+            } catch {
+              /* dropped — не блокируем repo:updated из-за этого */
+            }
+          } else if (!prevHead) {
+            // Первый push в пустой репо — берём все файлы свежего HEAD.
+            try {
+              const { simpleGit } = await import('simple-git');
+              const g = simpleGit({ baseDir: repoPath });
+              const out = await g.raw(['ls-tree', '-r', '--name-only', sha]);
+              pushedFiles = out
+                .split('\n')
+                .map((s) => s.trim())
+                .filter(Boolean);
+            } catch {
+              /* ignore */
+            }
+          }
+
+          if (pushedFiles.length > 0) {
+            recordLockSessionFiles(ctx.projectId, pushedFiles);
+          }
+
           broadcastToProject(ctx.projectId, {
             type: 'repo:updated',
             projectId: ctx.projectId,
             sha,
             authorId: ctx.userId,
             authorName: ctx.username,
-            filesChanged: 0,
+            filesChanged: pushedFiles.length,
             message: '',
             timestamp: Date.now(),
           });
@@ -227,7 +272,12 @@ function runGitHttpBackend(
               `INSERT INTO audit_log (timestamp, user_id, project_id, action, detail)
                VALUES (?, ?, ?, 'push', ?)`,
             )
-            .run(Date.now(), ctx.userId, ctx.projectId, JSON.stringify({ sha }));
+            .run(
+              Date.now(),
+              ctx.userId,
+              ctx.projectId,
+              JSON.stringify({ sha, files: pushedFiles.slice(0, 50) }),
+            );
         });
       }
       resolve();
