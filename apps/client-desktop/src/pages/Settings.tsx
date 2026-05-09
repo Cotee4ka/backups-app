@@ -3,8 +3,23 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
 import { useAppStore } from '@/store/app-store';
-import { Sun, Moon, Monitor, Power, Clock, Globe, Trash2 } from 'lucide-react';
+import {
+  Sun,
+  Moon,
+  Monitor,
+  Power,
+  Clock,
+  Globe,
+  Trash2,
+  FolderTree,
+  History,
+  GitCompareArrows,
+  Database,
+  Info,
+} from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
 
 type AccentTheme = 'indigo' | 'ocean' | 'forest' | 'sunset' | 'gold' | 'mono';
 
@@ -16,6 +31,10 @@ interface AppSettings {
   startMinimized: boolean;
   syncDebounceMs: number;
   syncPeriodicMs: number;
+  foldersBottom: boolean;
+  dataFilesBottom: boolean;
+  changeFeedAfterSyncOnly: boolean;
+  changeFeedShowDiff: boolean;
 }
 
 const ACCENT_THEMES: { id: AccentTheme; label: string; gradient: string }[] = [
@@ -181,6 +200,55 @@ export const SettingsPage = () => {
 
       <Card>
         <CardHeader>
+          <div className="flex flex-wrap items-center gap-2">
+            <CardTitle>Вид списка файлов</CardTitle>
+            <Badge variant="info" className="font-normal">По стандарту</Badge>
+            <span
+              className="cursor-help text-muted-foreground"
+              title="Эти значения применяются к новым проектам. Для каждого проекта можно переопределить отдельно — на странице проекта в «Настройках»."
+            >
+              <Info className="h-4 w-4" />
+            </span>
+          </div>
+          <CardDescription>
+            Поведение списка «Файлы проекта» и панели «История изменений». Каждый проект может
+            переопределить эти значения в своих настройках.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <ToggleRow
+            icon={<FolderTree className="accent-fg h-4 w-4" />}
+            title="Папки в самом низу"
+            description="При сортировке сначала идут файлы, папки прижимаются вниз."
+            checked={settings.foldersBottom}
+            onChange={(v) => patch({ foldersBottom: v })}
+          />
+          <ToggleRow
+            icon={<Database className="accent-fg h-4 w-4" />}
+            title="Файлы данных внизу списка"
+            description="Всё помеченное «хранилище данных» / исключённое опускается в конец списка."
+            checked={settings.dataFilesBottom}
+            onChange={(v) => patch({ dataFilesBottom: v })}
+          />
+          <ToggleRow
+            icon={<History className="accent-fg h-4 w-4" />}
+            title="История только после синхронизации"
+            description="Показывать в фиде только файлы, изменённые после последнего синка."
+            checked={settings.changeFeedAfterSyncOnly}
+            onChange={(v) => patch({ changeFeedAfterSyncOnly: v })}
+          />
+          <ToggleRow
+            icon={<GitCompareArrows className="accent-fg h-4 w-4" />}
+            title="Считать +/− строк в истории"
+            description="Сравнивать локальную копию и проду, показывать число добавленных/удалённых строк. Подгружается лениво."
+            checked={settings.changeFeedShowDiff}
+            onChange={(v) => patch({ changeFeedShowDiff: v })}
+          />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
           <CardTitle>Синхронизация</CardTitle>
           <CardDescription>
             Изменения коммитятся батчами, а не на каждое нажатие. Это бережёт диск и сеть.
@@ -279,17 +347,23 @@ const ToggleRow = ({
   checked: boolean;
   onChange: (v: boolean) => void;
 }) => (
-  <label className="flex cursor-pointer items-center gap-4 rounded-lg border border-border bg-muted/20 p-4 transition hover:bg-muted/40">
+  <div
+    role="button"
+    tabIndex={0}
+    onClick={() => onChange(!checked)}
+    onKeyDown={(e) => {
+      if (e.key === ' ' || e.key === 'Enter') {
+        e.preventDefault();
+        onChange(!checked);
+      }
+    }}
+    className="flex cursor-pointer items-center gap-4 rounded-lg border border-border bg-muted/20 p-4 transition hover:bg-muted/40"
+  >
     <div className="grid h-9 w-9 place-items-center rounded-md bg-muted/50">{icon}</div>
     <div className="flex-1">
       <div className="text-sm font-medium">{title}</div>
       <div className="text-xs text-muted-foreground">{description}</div>
     </div>
-    <input
-      type="checkbox"
-      className="h-5 w-9 cursor-pointer appearance-none rounded-full bg-muted transition before:block before:h-4 before:w-4 before:translate-x-0.5 before:translate-y-0.5 before:rounded-full before:bg-foreground before:transition checked:bg-violet-500 checked:before:translate-x-[18px]"
-      checked={checked}
-      onChange={(e) => onChange(e.target.checked)}
-    />
-  </label>
+    <Switch checked={checked} onChange={onChange} label={title} />
+  </div>
 );
