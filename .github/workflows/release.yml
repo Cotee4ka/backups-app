@@ -33,12 +33,11 @@ jobs:
         working-directory: apps/client-desktop
         run: pnpm ${{ matrix.target }}
         env:
-          # code-signing настройки задаются через secrets — заглушки оставлены пустыми
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Code-signing отключён: секретов нет, и пустые CSC_LINK ломают
+          # electron-builder (он трактует пустую строку как путь к файлу).
+          # Когда появятся cert'ы — добавить CSC_LINK/CSC_KEY_PASSWORD как
+          # secrets и убрать CSC_IDENTITY_AUTO_DISCOVERY.
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
       - uses: actions/upload-artifact@v4
         with:
           name: backups-app-${{ matrix.os }}
