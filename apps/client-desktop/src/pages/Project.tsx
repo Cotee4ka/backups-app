@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Dialog } from '@/components/ui/dialog';
+import { Switch } from '@/components/ui/switch';
 import { useAppStore, statusKey } from '@/store/app-store';
 import { copyToClipboard, formatRelativeTime, shortSha } from '@/lib/utils';
 import {
@@ -45,6 +46,10 @@ import {
 import { Spinner, DotsLoader } from '@/components/ui/spinner';
 import { isHeavyPath } from '@/lib/heavy-files';
 import { matchesRule } from '@/lib/path-rules';
+import {
+  ServerOutdatedModal,
+  useServerVersionGate,
+} from '@/components/server-outdated-modal';
 
 interface CommitInfo {
   sha: string;
@@ -79,6 +84,7 @@ export const ProjectPage = () => {
 
   const server = servers.find((s) => s.id === serverId);
   const synced = server?.syncedFolders.find((f) => f.projectId === projectId);
+  const gate = useServerVersionGate(serverId);
 
   const [project, setProject] = React.useState<{
     name: string;
@@ -405,39 +411,44 @@ export const ProjectPage = () => {
       )}
 
       {tab === 'settings' && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Настройки проекта</CardTitle>
-            <CardDescription>
-              Полная конфигурация хранится в файле <code className="font-mono">.backupsapp.json</code>{' '}
-              в корне репозитория.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <DangerRow
-              title="Удалить проект"
-              description="Удаляет проект и все его бекапы на сервере. Безвозвратно."
-              action={
-                <Button
-                  variant="destructive"
-                  onClick={async () => {
-                    if (!confirm(`Удалить проект «${project?.name}» вместе со всей историей?`))
-                      return;
-                    try {
-                      await window.backupsApp.projects.delete(serverId, projectId);
-                      addToast({ type: 'success', text: 'Проект удалён' });
-                      nav(`/server/${serverId}`);
-                    } catch (e) {
-                      addToast({ type: 'error', text: (e as Error).message });
-                    }
-                  }}
-                >
-                  Удалить
-                </Button>
-              }
-            />
-          </CardContent>
-        </Card>
+        <div className="space-y-4">
+          {isExternal && (
+            <ProjectUiSettings serverId={serverId} projectId={projectId} />
+          )}
+          <Card>
+            <CardHeader>
+              <CardTitle>Настройки проекта</CardTitle>
+              <CardDescription>
+                Полная конфигурация хранится в файле <code className="font-mono">.backupsapp.json</code>{' '}
+                в корне репозитория.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <DangerRow
+                title="Удалить проект"
+                description="Удаляет проект и все его бекапы на сервере. Безвозвратно."
+                action={
+                  <Button
+                    variant="destructive"
+                    onClick={async () => {
+                      if (!confirm(`Удалить проект «${project?.name}» вместе со всей историей?`))
+                        return;
+                      try {
+                        await window.backupsApp.projects.delete(serverId, projectId);
+                        addToast({ type: 'success', text: 'Проект удалён' });
+                        nav(`/server/${serverId}`);
+                      } catch (e) {
+                        addToast({ type: 'error', text: (e as Error).message });
+                      }
+                    }}
+                  >
+                    Удалить
+                  </Button>
+                }
+              />
+            </CardContent>
+          </Card>
+        </div>
       )}
 
       <Dialog
@@ -508,6 +519,19 @@ export const ProjectPage = () => {
           </div>
         </div>
       </Dialog>
+
+      {/* Version-gate: блокируем работу с проектом, если хост устарел. */}
+      <ServerOutdatedModal
+        open={gate.status === 'outdated'}
+        onClose={() => nav('/dashboard')}
+        server={server ? { id: server.id, url: server.url, name: server.name } : null}
+        current={gate.current}
+        expected={gate.expected}
+        onUpdated={() => {
+          gate.refetch();
+          void load();
+        }}
+      />
     </div>
   );
 };
@@ -730,6 +754,143 @@ interface FileHistoryEntry {
   changeType: string;
 }
 
+type UiKey =
+  | 'foldersBottom'
+  | 'dataFilesBottom'
+  | 'changeFeedAfterSyncOnly'
+  | 'changeFeedShowDiff';
+
+const UI_TOGGLE_META: Array<{ key: UiKey; title: string; description: string }> = [
+  {
+    key: 'foldersBottom',
+    title: 'Папки в самом низу',
+    description: 'При сортировке файлы идут первыми, папки прижимаются вниз.',
+  },
+  {
+    key: 'dataFilesBottom',
+    title: 'Файлы данных внизу списка',
+    description: 'Всё помеченное «хранилище данных» / исключённое опускается в конец.',
+  },
+  {
+    key: 'changeFeedAfterSyncOnly',
+    title: 'История только после синхронизации',
+    description: 'В фиде показываются только файлы, изменённые после последнего синка.',
+  },
+  {
+    key: 'changeFeedShowDiff',
+    title: 'Считать +/− строк в истории',
+    description: 'Сравнивает локальную копию и проду, показывает добавленные/удалённые строки.',
+  },
+];
+
+function ProjectUiSettings({
+  serverId,
+  projectId,
+}: {
+  serverId: string;
+  projectId: string;
+}) {
+  const addToast = useAppStore((s) => s.addToast);
+  const [global, setGlobal] = React.useState<Record<UiKey, boolean> | null>(null);
+  const [overrides, setOverrides] = React.useState<Partial<Record<UiKey, boolean>>>({});
+  const [loading, setLoading] = React.useState(true);
+
+  const reload = React.useCallback(async () => {
+    try {
+      const [s, ext] = await Promise.all([
+        window.backupsApp.settings.get(),
+        window.backupsApp.externalSync.get(serverId, projectId),
+      ]);
+      const x = s as Record<string, unknown>;
+      setGlobal({
+        foldersBottom: (x.foldersBottom as boolean) ?? true,
+        dataFilesBottom: (x.dataFilesBottom as boolean) ?? true,
+        changeFeedAfterSyncOnly: (x.changeFeedAfterSyncOnly as boolean) ?? true,
+        changeFeedShowDiff: (x.changeFeedShowDiff as boolean) ?? true,
+      });
+      const ov = (ext as { uiOverrides?: Partial<Record<UiKey, boolean>> } | null)?.uiOverrides ?? {};
+      setOverrides(ov);
+    } finally {
+      setLoading(false);
+    }
+  }, [serverId, projectId]);
+
+  React.useEffect(() => {
+    void reload();
+  }, [reload]);
+
+  async function setOverride(key: UiKey, value: boolean | null) {
+    try {
+      await window.backupsApp.externalSync.setUiOverride({
+        serverId,
+        projectId,
+        key,
+        value,
+      });
+      await reload();
+    } catch (e) {
+      addToast({ type: 'error', text: (e as Error).message });
+    }
+  }
+
+  if (loading || !global) return null;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Вид списка и истории</CardTitle>
+        <CardDescription>
+          Эти настройки переопределяют глобальные значения для текущего проекта. Сбрось
+          переключатель в «по глобальному», чтобы наследовать значение из настроек приложения.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {UI_TOGGLE_META.map((m) => {
+          const ov = overrides[m.key];
+          const globalVal = global[m.key];
+          const effective = ov ?? globalVal;
+          return (
+            <div
+              key={m.key}
+              className="rounded-lg border border-border bg-muted/15 p-3"
+            >
+              <div className="flex items-start gap-3">
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-medium">{m.title}</div>
+                  <div className="mt-0.5 text-xs text-muted-foreground">{m.description}</div>
+                  <div className="mt-2 flex items-center gap-2 text-[11px]">
+                    {ov === undefined ? (
+                      <Badge variant="secondary" className="font-normal">
+                        Наследуется из глобала: {globalVal ? 'вкл' : 'выкл'}
+                      </Badge>
+                    ) : (
+                      <>
+                        <Badge variant="info" className="font-normal">
+                          Переопределено для проекта
+                        </Badge>
+                        <button
+                          className="text-muted-foreground underline-offset-2 hover:underline"
+                          onClick={() => void setOverride(m.key, null)}
+                        >
+                          сбросить
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+                <Switch
+                  checked={effective}
+                  onChange={(v) => void setOverride(m.key, v)}
+                />
+              </div>
+            </div>
+          );
+        })}
+      </CardContent>
+    </Card>
+  );
+}
+
 function FileBrowser({
   serverId,
   projectId,
@@ -761,6 +922,12 @@ function FileBrowser({
     manualHeavyPaths?: string[];
     lastSyncAt?: number;
     lastSyncIncludedHeavy?: boolean;
+    uiOverrides?: {
+      foldersBottom?: boolean;
+      dataFilesBottom?: boolean;
+      changeFeedAfterSyncOnly?: boolean;
+      changeFeedShowDiff?: boolean;
+    };
   }
   interface HeavyCandidate {
     relPath: string;
@@ -838,14 +1005,211 @@ function FileBrowser({
   const [sortKey, setSortKey] = React.useState<SortKey>('name');
   const [sortAsc, setSortAsc] = React.useState(true);
 
+  // Подгружаем настройки приложения (обновляются после смены — в Settings).
+  type UiTogglesSnap = {
+    foldersBottom: boolean;
+    dataFilesBottom: boolean;
+    changeFeedAfterSyncOnly: boolean;
+    changeFeedShowDiff: boolean;
+  };
+  const [globalUi, setGlobalUi] = React.useState<UiTogglesSnap | null>(null);
+  React.useEffect(() => {
+    let alive = true;
+    const load = () =>
+      window.backupsApp.settings.get().then((s) => {
+        if (!alive) return;
+        const x = s as Record<string, unknown>;
+        setGlobalUi({
+          foldersBottom: (x.foldersBottom as boolean) ?? true,
+          dataFilesBottom: (x.dataFilesBottom as boolean) ?? true,
+          changeFeedAfterSyncOnly: (x.changeFeedAfterSyncOnly as boolean) ?? true,
+          changeFeedShowDiff: (x.changeFeedShowDiff as boolean) ?? true,
+        });
+      });
+    void load();
+    const onFocus = () => void load();
+    window.addEventListener('focus', onFocus);
+    return () => {
+      alive = false;
+      window.removeEventListener('focus', onFocus);
+    };
+  }, []);
+
+  // Эффективные настройки = глобал + uiOverrides проекта (перекрытия).
+  const appSettings = React.useMemo<UiTogglesSnap | null>(() => {
+    if (!globalUi) return null;
+    const ov = extSync?.uiOverrides ?? {};
+    return {
+      foldersBottom: ov.foldersBottom ?? globalUi.foldersBottom,
+      dataFilesBottom: ov.dataFilesBottom ?? globalUi.dataFilesBottom,
+      changeFeedAfterSyncOnly:
+        ov.changeFeedAfterSyncOnly ?? globalUi.changeFeedAfterSyncOnly,
+      changeFeedShowDiff: ov.changeFeedShowDiff ?? globalUi.changeFeedShowDiff,
+    };
+  }, [globalUi, extSync?.uiOverrides]);
+
+  // Контекстное меню по ПКМ на файле
+  const [ctxMenu, setCtxMenu] = React.useState<null | {
+    x: number;
+    y: number;
+    relPath: string;
+    name: string;
+    status?: FileSyncStatus;
+    isHeavyMarked: boolean;
+  }>(null);
+
+  // Кэш расчёта +/- по relPath. Считается лениво для top-N в фиде, когда
+  // включён тоггл «Считать +/− строк».
+  type DiffEntry =
+    | { ins: number; del: number; skipped?: 'binary' | 'too-large' | 'no-local' }
+    | 'loading'
+    | 'error';
+  const [diffCache, setDiffCache] = React.useState<Map<string, DiffEntry>>(new Map());
+
+  // Топ-фид для правой панели «История изменений». Вынесен в useMemo, чтобы
+  // эффект подгрузки diff'ов не пересчитывал список на каждый рендер.
+  const feedFiles = React.useMemo(() => {
+    const excludedSet = new Set(extSync?.excludedPaths ?? []);
+    const manualHeavySet = new Set(extSync?.manualHeavyPaths ?? []);
+    const afterSyncOnly = !!appSettings?.changeFeedAfterSyncOnly;
+    const sinceTs = afterSyncOnly ? extSync?.lastSyncAt ?? 0 : 0;
+    const isFiltered = (p: string) => {
+      if (serverHeavyPaths.has(p)) return true;
+      if (manualHeavySet.has(p)) return true;
+      for (const r of excludedSet) if (r && (r === p || p.startsWith(r + '/'))) return true;
+      for (const r of manualHeavySet) if (r && (r === p || p.startsWith(r + '/'))) return true;
+      return false;
+    };
+    return allProjectFiles
+      .filter((f) => !isFiltered(f.relPath))
+      .filter((f) => !afterSyncOnly || f.mtime >= sinceTs)
+      .sort((a, b) => b.mtime - a.mtime)
+      .slice(0, 60);
+  }, [
+    allProjectFiles,
+    extSync?.excludedPaths,
+    extSync?.manualHeavyPaths,
+    extSync?.lastSyncAt,
+    serverHeavyPaths,
+    appSettings?.changeFeedAfterSyncOnly,
+  ]);
+
+  // Если тоггл diff'ов выключили — забываем кэш, чтобы при включении заново
+  // показались актуальные числа (а в это время ничего не висело).
+  React.useEffect(() => {
+    if (appSettings?.changeFeedShowDiff === false) {
+      setDiffCache(new Map());
+    }
+  }, [appSettings?.changeFeedShowDiff]);
+
+  // После синхронизации обнуляем diff-кэш — локальные копии обновились,
+  // прежние числа уже не верны.
+  React.useEffect(() => {
+    setDiffCache(new Map());
+  }, [extSync?.lastSyncAt]);
+
+  // Множество путей с запросом «в полёте» — через ref, чтобы не было петли
+  // с deps useEffect (включение diffCache в deps убивало воркеры на каждый
+  // setDiffCache, и записи 'loading' оставались навсегда).
+  const inflightRef = React.useRef<Set<string>>(new Set());
+  const diffCacheRef = React.useRef<Map<string, DiffEntry>>(new Map());
+  React.useEffect(() => {
+    diffCacheRef.current = diffCache;
+  }, [diffCache]);
+
+  // Подгружаем diff'ы для top-15 видимых строк фида (чтобы не валить сервер).
+  React.useEffect(() => {
+    if (!appSettings?.changeFeedShowDiff) return;
+    if (!isExternal || feedFiles.length === 0) return;
+    const targets = feedFiles
+      .slice(0, 15)
+      .filter(
+        (f) => !diffCacheRef.current.has(f.relPath) && !inflightRef.current.has(f.relPath),
+      );
+    if (targets.length === 0) return;
+    setDiffCache((prev) => {
+      const next = new Map(prev);
+      for (const t of targets) {
+        next.set(t.relPath, 'loading');
+        inflightRef.current.add(t.relPath);
+      }
+      return next;
+    });
+    // Параллелим до 4х одновременных запросов — компромисс между скоростью
+    // (на 15 файлов один за одним заняло бы десятки секунд) и нагрузкой.
+    const queue = [...targets];
+    const workers = Array.from({ length: Math.min(4, queue.length) }, async () => {
+      while (true) {
+        const t = queue.shift();
+        if (!t) return;
+        try {
+          // eslint-disable-next-line no-console
+          console.log('[diffStats] fetching', t.relPath);
+          const r = (await window.backupsApp.externalSync.diffStats(
+            serverId,
+            projectId,
+            t.relPath,
+          )) as { ins: number; del: number; skipped?: 'binary' | 'too-large' | 'no-local' };
+          // eslint-disable-next-line no-console
+          console.log('[diffStats] got', t.relPath, r);
+          setDiffCache((prev) => {
+            const next = new Map(prev);
+            next.set(t.relPath, r);
+            return next;
+          });
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          console.warn('[diffStats] failed for', t.relPath, e);
+          setDiffCache((prev) => {
+            const next = new Map(prev);
+            next.set(t.relPath, 'error');
+            return next;
+          });
+        } finally {
+          inflightRef.current.delete(t.relPath);
+        }
+      }
+    });
+    void Promise.all(workers);
+  }, [
+    appSettings?.changeFeedShowDiff,
+    isExternal,
+    feedFiles,
+    serverId,
+    projectId,
+  ]);
+
+  React.useEffect(() => {
+    if (!ctxMenu) return;
+    const onClick = () => setCtxMenu(null);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setCtxMenu(null);
+    };
+    // Глушим прокрутку под меню — клик/колесико не должны прокручивать
+    // страницу, пока меню открыто. Сохраняем прежнее значение overflow,
+    // чтобы не сломать стили лэйаута на закрытии.
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const stopWheel = (e: WheelEvent) => e.preventDefault();
+    window.addEventListener('mousedown', onClick);
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('wheel', stopWheel, { passive: false });
+    window.addEventListener('touchmove', stopWheel as EventListener, { passive: false });
+    return () => {
+      document.body.style.overflow = prev;
+      window.removeEventListener('mousedown', onClick);
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('wheel', stopWheel);
+      window.removeEventListener('touchmove', stopWheel as EventListener);
+    };
+  }, [ctxMenu]);
+
   function toggleSort(key: SortKey) {
     if (sortKey === key) setSortAsc((v) => !v);
     else { setSortKey(key); setSortAsc(key === 'name'); }
   }
 
   const sorted = React.useMemo(() => {
-    const dirs = entries.filter((e) => e.type === 'dir');
-    const files = entries.filter((e) => e.type === 'file');
     const cmp = (a: TreeEntry, b: TreeEntry): number => {
       let v = 0;
       if (sortKey === 'name') v = a.name.localeCompare(b.name);
@@ -858,12 +1222,57 @@ function FileBrowser({
       }
       return sortAsc ? v : -v;
     };
-    return [...dirs.sort(cmp), ...files.sort(cmp)];
-  }, [entries, sortKey, sortAsc]);
+
+    // Файл/папка считается «data» если: путь в excluded, в manualHeavy
+    // (или внутри такой папки), либо сервер пометил как heavy.
+    const excluded = extSync?.excludedPaths ?? [];
+    const manualHeavy = extSync?.manualHeavyPaths ?? [];
+    const isDataEntry = (e: TreeEntry): boolean => {
+      if (matchesRule(e.path, excluded)) return true;
+      if (matchesRule(e.path, manualHeavy)) return true;
+      if (e.type === 'file' && serverHeavyPaths.has(e.path)) return true;
+      if (e.type === 'dir') {
+        const prefix = e.path + '/';
+        for (const p of serverHeavyPaths) if (p.startsWith(prefix)) return true;
+      }
+      return false;
+    };
+
+    const dataPushDown = !!appSettings?.dataFilesBottom;
+    const foldersDown = !!appSettings?.foldersBottom;
+
+    const dirs: TreeEntry[] = [];
+    const files: TreeEntry[] = [];
+    const dataDirs: TreeEntry[] = [];
+    const dataFiles: TreeEntry[] = [];
+    for (const e of entries) {
+      const data = dataPushDown && isDataEntry(e);
+      if (e.type === 'dir') (data ? dataDirs : dirs).push(e);
+      else (data ? dataFiles : files).push(e);
+    }
+    dirs.sort(cmp);
+    files.sort(cmp);
+    dataDirs.sort(cmp);
+    dataFiles.sort(cmp);
+    const top = foldersDown ? [...files, ...dirs] : [...dirs, ...files];
+    const bottom = foldersDown ? [...dataFiles, ...dataDirs] : [...dataDirs, ...dataFiles];
+    return [...top, ...bottom];
+  }, [
+    entries,
+    sortKey,
+    sortAsc,
+    appSettings?.foldersBottom,
+    appSettings?.dataFilesBottom,
+    extSync?.excludedPaths,
+    extSync?.manualHeavyPaths,
+    serverHeavyPaths,
+  ]);
 
   const loadTree = React.useCallback(
-    async (nextPath = pathInRepo) => {
-      setLoading(true);
+    async (nextPath = pathInRepo, opts: { silent?: boolean } = {}) => {
+      // Silent-режим — для фонового авторефреша. Не дёргаем спиннер,
+      // не сбрасываем entries: данные подменим только когда придёт ответ.
+      if (!opts.silent) setLoading(true);
       try {
         const r = (await window.backupsApp.projects.tree(
           serverId,
@@ -909,18 +1318,51 @@ function FileBrowser({
           setEntries([]);
           return;
         }
-        addToast({ type: 'error', text: message });
+        if (!opts.silent) addToast({ type: 'error', text: message });
       } finally {
-        setLoading(false);
+        if (!opts.silent) setLoading(false);
       }
     },
     [addToast, isExternal, pathInRepo, projectId, serverId],
   );
 
+  // Тик для принудительного перерасчёта списка всех файлов и статусов:
+  // обновляется после синка, на focus окна и при клике «Обновить».
+  const [refreshTick, setRefreshTick] = React.useState(0);
+  const firstLoadDoneRef = React.useRef(false);
+
   React.useEffect(() => {
-    void loadTree('');
+    // Первый mount → loud (со спиннером); все последующие тики → silent.
+    const silent = firstLoadDoneRef.current;
+    void loadTree('', { silent });
+    firstLoadDoneRef.current = true;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serverId, projectId, isExternal]);
+  }, [serverId, projectId, isExternal, refreshTick]);
+
+  // При смене проекта/сервера сбрасываем «первый mount уже был».
+  React.useEffect(() => {
+    firstLoadDoneRef.current = false;
+  }, [serverId, projectId]);
+
+  // Когда окно снова получает фокус — например, юзер вернулся в приложение
+  // после правки файла на проде — освежаем mtime'ы.
+  React.useEffect(() => {
+    if (!isExternal) return;
+    const onFocus = () => setRefreshTick((t) => t + 1);
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [isExternal]);
+
+  // Авто-опрос каждые 15с, пока вкладка/окно видимы. На скрытом окне таймер
+  // не тикает — вернётся через onFocus и сразу же дёрнется ручной рефреш.
+  React.useEffect(() => {
+    if (!isExternal) return;
+    const id = setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      setRefreshTick((t) => t + 1);
+    }, 60_000);
+    return () => clearInterval(id);
+  }, [isExternal]);
 
   React.useEffect(() => {
     if (!isExternal) return;
@@ -968,7 +1410,7 @@ function FileBrowser({
         /* старый сервер без /tree-recursive — оставляем пустые */
       }
     })();
-  }, [isExternal, serverId, projectId]);
+  }, [isExternal, serverId, projectId, refreshTick]);
 
   React.useEffect(() => {
     if (!isExternal) return;
@@ -985,6 +1427,11 @@ function FileBrowser({
       }));
       if (p.phase === 'done' || p.phase === 'error') {
         setTimeout(() => setSyncProgress(null), 1500);
+      }
+      if (p.phase === 'done') {
+        // Запросить свежий список файлов и статусы — теперь часть может
+        // оказаться в категории «изменено после синка».
+        setRefreshTick((t) => t + 1);
       }
     });
     return off;
@@ -1003,6 +1450,16 @@ function FileBrowser({
     }
     setSyncProgress({ phase: 'listing', includeHeavy });
     try {
+      // Сливаем «хранилище данных» из 3 источников:
+      // 1) что юзер пометил руками (extSync.manualHeavyPaths),
+      // 2) что детектор сервера нашёл автоматом (serverHeavyPaths) — на случай,
+      //    если визард ещё не запускали;
+      // вычитаем то, что юзер явно добавил в manualPaths (хочет качать).
+      const manualSet = new Set(extSync?.manualPaths ?? []);
+      const heavyMerged = new Set<string>([...(extSync?.manualHeavyPaths ?? [])]);
+      for (const p of serverHeavyPaths) {
+        if (!manualSet.has(p)) heavyMerged.add(p);
+      }
       const result = (await window.backupsApp.externalSync.run({
         serverId,
         projectId,
@@ -1010,7 +1467,7 @@ function FileBrowser({
         includeHeavy,
         manualPaths: extSync?.manualPaths,
         excludedPaths: extSync?.excludedPaths,
-        manualHeavyPaths: extSync?.manualHeavyPaths,
+        manualHeavyPaths: Array.from(heavyMerged),
         prune: false,
       })) as { downloaded: number; skipped: number; bytes: number };
       const fresh = (await window.backupsApp.externalSync.get(serverId, projectId)) as ExtSync | null;
@@ -1113,39 +1570,41 @@ function FileBrowser({
 
   async function applyHeavyAndSync(runSyncAfter: boolean) {
     if (!heavyCandidates) return;
-    // Собрать manualPaths / excludedPaths из выбранных значений.
     const cur = extSync ?? {
       projectId,
       localPath: '',
       excludedPaths: [] as string[],
       manualPaths: [] as string[],
+      manualHeavyPaths: [] as string[],
     };
-    // Берём существующие manual/excluded, которые НЕ относятся к heavy
-    // (могут быть пути не из heavy — оставим их как есть).
-    const heavySet = new Set(heavyCandidates.map((c) => c.relPath));
-    const keptManual = (cur.manualPaths ?? []).filter((p) => !heavySet.has(p));
-    const keptExcluded = (cur.excludedPaths ?? []).filter((p) => !heavySet.has(p));
+    // Все пути, которые показывали в визарде, перестраиваем с нуля.
+    // Существующие правила, не относящиеся к этим путям, оставляем как есть.
+    const wizardSet = new Set(heavyCandidates.map((c) => c.relPath));
+    const keptManual = (cur.manualPaths ?? []).filter((p) => !wizardSet.has(p));
+    const keptExcluded = (cur.excludedPaths ?? []).filter((p) => !wizardSet.has(p));
+    const keptHeavy = (cur.manualHeavyPaths ?? []).filter((p) => !wizardSet.has(p));
     const nextManual = [...keptManual];
     const nextExcluded = [...keptExcluded];
+    const nextHeavy = [...keptHeavy];
     for (const f of heavyCandidates) {
       const c = heavyChoices[f.relPath] ?? 'heavy';
       if (c === 'normal') nextManual.push(f.relPath);
       else if (c === 'excluded') nextExcluded.push(f.relPath);
+      else nextHeavy.push(f.relPath); // 'heavy' → запоминаем как «хранилище данных»
     }
-    // Если папка ещё не выбрана — попросим выбрать её перед синком.
     let localPath = cur.localPath;
     if (runSyncAfter && !localPath) {
       const chosen = await chooseLocalFolder();
       if (!chosen) return;
       localPath = chosen;
     }
-    // Сохраняем правила (если папка уже была — на бэкенд, иначе только локально).
     if (cur.localPath || localPath) {
       const updated = (await window.backupsApp.externalSync.setRules({
         serverId,
         projectId,
         manualPaths: nextManual,
         excludedPaths: nextExcluded,
+        manualHeavyPaths: nextHeavy,
       })) as ExtSync | null;
       setExtSync(
         updated ?? {
@@ -1153,6 +1612,7 @@ function FileBrowser({
           localPath,
           excludedPaths: nextExcluded,
           manualPaths: nextManual,
+          manualHeavyPaths: nextHeavy,
         },
       );
     } else {
@@ -1161,18 +1621,19 @@ function FileBrowser({
         localPath: '',
         excludedPaths: nextExcluded,
         manualPaths: nextManual,
+        manualHeavyPaths: nextHeavy,
       });
     }
     setHeavyDialogOpen(false);
     if (runSyncAfter) {
-      // Запускаем sync с includeHeavy=true — скачаются и тяжёлые файлы,
-      // которые остались в категории "тяжёлый". Те, что юзер пометил
-      // как "обычный" (manual), и так попадают в основной набор.
-      // Те, что "excluded" — не попадут вообще.
+      // includeHeavy=true → скачаются и файлы хранилища (manualHeavyPaths),
+      // потому что юзер явно нажал «и скачать». Те, что пометили excluded,
+      // пропустятся; manual («обычный») гарантированно скачаются.
       await runSyncWith({
         includeHeavy: true,
         manualPaths: nextManual,
         excludedPaths: nextExcluded,
+        manualHeavyPaths: nextHeavy,
         localPath,
       });
     }
@@ -1398,7 +1859,7 @@ function FileBrowser({
 
   return (
     <>
-    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
+    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px] lg:items-stretch">
       <Card className="overflow-hidden">
         <CardHeader className="flex-row items-center justify-between gap-3">
           <div>
@@ -1410,7 +1871,14 @@ function FileBrowser({
             </CardDescription>
           </div>
           <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={() => loadTree()}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                void loadTree();
+                setRefreshTick((t) => t + 1);
+              }}
+            >
               <RefreshCcw className="h-4 w-4" /> Обновить
             </Button>
           </div>
@@ -1548,6 +2016,18 @@ function FileBrowser({
                       (selected?.path === entry.path ? 'bg-accent/25' : '') +
                       (inExcluded ? ' opacity-60' : '')
                     }
+                    onContextMenu={(e) => {
+                      if (entry.type !== 'file' || !isExternal) return;
+                      e.preventDefault();
+                      setCtxMenu({
+                        x: e.clientX,
+                        y: e.clientY,
+                        relPath: entry.path,
+                        name: entry.name,
+                        status,
+                        isHeavyMarked,
+                      });
+                    }}
                   >
                     <button
                       className="flex min-w-0 items-center gap-3 text-left"
@@ -1661,7 +2141,11 @@ function FileBrowser({
                             size="sm"
                             title={
                               isExternal && extSync?.localPath
-                                ? 'Скачать в локальную папку синка (поверх существующего)'
+                                ? status === 'synced'
+                                  ? 'Обновить файл (перекачать с проды)'
+                                  : status === 'modified'
+                                    ? 'Обновить (локальная копия изменена — будет перезаписана)'
+                                    : 'Скачать в локальную папку синка'
                                 : 'Скачать файл'
                             }
                             onClick={() => {
@@ -1672,7 +2156,11 @@ function FileBrowser({
                               }
                             }}
                           >
-                            <Download className="h-4 w-4" />
+                            {isExternal && extSync?.localPath && (status === 'synced' || status === 'modified') ? (
+                              <RefreshCw className="h-4 w-4" />
+                            ) : (
+                              <Download className="h-4 w-4" />
+                            )}
                           </Button>
                         </>
                       ) : (
@@ -1690,7 +2178,7 @@ function FileBrowser({
         </CardContent>
       </Card>
 
-      <div className="space-y-4 lg:sticky lg:top-6 lg:self-start">
+      <div className="flex min-h-0 flex-col gap-4 lg:h-full">
         {isExternal && (
           <Card>
             <CardHeader className="pb-3">
@@ -1813,60 +2301,205 @@ function FileBrowser({
           </Card>
         )}
 
-        <Card>
-          <CardHeader>
-            <CardTitle>История файла</CardTitle>
-            <CardDescription>
-              {selected ? selected.path : 'Выберите файл слева, чтобы увидеть всю историю.'}
-            </CardDescription>
-          </CardHeader>
-        <CardContent>
-          {!selected ? (
-            <div className="rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
-              Здесь появятся авторы, даты изменений и версии выбранного файла.
-            </div>
-          ) : historyLoading ? (
-            <div className="py-8 text-center text-sm text-muted-foreground">Загрузка истории…</div>
-          ) : fileHistory.length === 0 ? (
-            <div className="py-8 text-center text-sm text-muted-foreground">История файла пуста.</div>
-          ) : (
-            <ul className="space-y-3">
-              {fileHistory.map((h) => (
-                <li key={h.sha} className="rounded-lg border border-border bg-muted/10 p-3">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="truncate text-sm font-medium">
-                        {parseAuthorMessage(h.message)}
-                      </div>
-                      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                        <span>{h.authorName}</span>
-                        <span>·</span>
-                        <span>{formatRelativeTime(h.timestamp)}</span>
-                        <code className="rounded bg-muted/40 px-1.5 py-0.5 font-mono text-[10px]">
-                          {h.shortSha || shortSha(h.sha)}
-                        </code>
-                      </div>
-                      <div className="mt-2 flex items-center gap-2 text-xs">
-                        <Badge variant="secondary">{changeTypeLabel(h.changeType)}</Badge>
-                        <span className="text-emerald-400">+{h.insertions}</span>
-                        <span className="text-destructive">-{h.deletions}</span>
-                      </div>
+        {isExternal ? (
+          <Card className="flex min-h-0 flex-1 flex-col overflow-hidden">
+            <CardHeader>
+              <CardTitle>История изменений</CardTitle>
+              <CardDescription>
+                Последние изменения файлов на проде (без хранилища данных и исключённых).
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="min-h-0 flex-1 overflow-y-auto">
+              {(() => {
+                const afterSyncOnly = !!appSettings?.changeFeedAfterSyncOnly;
+                if (allProjectFiles.length === 0) {
+                  return (
+                    <div className="py-8 text-center text-sm text-muted-foreground">
+                      Сервер ещё не отдал список файлов…
                     </div>
-                    <div className="flex shrink-0 gap-1">
-                      <Button variant="ghost" size="sm" title="Открыть эту версию" onClick={() => openFile(selected, h.sha)}>
-                        <ExternalLink className="h-4 w-4" />
-                      </Button>
-                      <Button variant="ghost" size="sm" title="Скачать эту версию" onClick={() => downloadFile(selected, h.sha)}>
-                        <Download className="h-4 w-4" />
-                      </Button>
+                  );
+                }
+                if (feedFiles.length === 0) {
+                  if (afterSyncOnly && !extSync?.lastSyncAt) {
+                    return (
+                      <div className="rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
+                        Синка ещё не было — нечего сравнивать. Запустите синхронизацию, чтобы зафиксировать точку отсчёта.
+                      </div>
+                    );
+                  }
+                  if (afterSyncOnly) {
+                    return (
+                      <div className="rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
+                        После последней синхронизации ничего не менялось.
+                      </div>
+                    );
+                  }
+                  return (
+                    <div className="rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
+                      Все недавно изменённые файлы попадают под «хранилище данных».
                     </div>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </CardContent>
-        </Card>
+                  );
+                }
+                return (
+                  <ul className="space-y-2">
+                    {feedFiles.map((f) => {
+                      const status = globalStatuses.get(f.relPath);
+                      const lastSlash = f.relPath.lastIndexOf('/');
+                      const dir = lastSlash >= 0 ? f.relPath.slice(0, lastSlash) : '';
+                      const name = lastSlash >= 0 ? f.relPath.slice(lastSlash + 1) : f.relPath;
+                      const sizeKb = f.size < 1024
+                        ? `${f.size} Б`
+                        : f.size < 1024 * 1024
+                          ? `${(f.size / 1024).toFixed(1)} КБ`
+                          : `${(f.size / 1024 / 1024).toFixed(1)} МБ`;
+                      const feedHeavy =
+                        serverHeavyPaths.has(f.relPath) ||
+                        matchesRule(f.relPath, extSync?.manualHeavyPaths);
+                      const diff = diffCache.get(f.relPath);
+                      return (
+                        <li
+                          key={f.relPath}
+                          className="cursor-default rounded-md border border-border bg-muted/10 p-2.5"
+                          onContextMenu={(e) => {
+                            e.preventDefault();
+                            setCtxMenu({
+                              x: e.clientX,
+                              y: e.clientY,
+                              relPath: f.relPath,
+                              name,
+                              status,
+                              isHeavyMarked: feedHeavy,
+                            });
+                          }}
+                        >
+                          <div className="flex items-center gap-2">
+                            <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                            <span className="truncate text-sm font-medium">{name}</span>
+                            {status === 'synced' && (
+                              <Paperclip className="ml-auto h-3 w-3 shrink-0 text-emerald-400/80 drop-shadow-[0_0_3px_rgba(74,222,128,0.95)]" />
+                            )}
+                            {status === 'modified' && (
+                              <Paperclip className="ml-auto h-3 w-3 shrink-0 text-amber-400/80 drop-shadow-[0_0_3px_rgba(251,191,36,0.95)]" />
+                            )}
+                          </div>
+                          {dir && (
+                            <div className="mt-0.5 truncate font-mono text-[10px] text-muted-foreground">
+                              {dir}/
+                            </div>
+                          )}
+                          <div className="mt-1 flex items-center gap-2 text-[11px] text-muted-foreground">
+                            <span>{formatRelativeTime(f.mtime)}</span>
+                            <span>·</span>
+                            <span>{sizeKb}</span>
+                            {appSettings?.changeFeedShowDiff && (
+                              <span className="ml-auto flex items-center gap-1.5 font-mono">
+                                {diff === 'loading' && (
+                                  <span className="text-muted-foreground/70">…</span>
+                                )}
+                                {diff === 'error' && (
+                                  <span className="text-rose-400/70" title="Не удалось посчитать">
+                                    ⚠
+                                  </span>
+                                )}
+                                {typeof diff === 'object' && diff?.skipped === 'binary' && (
+                                  <span className="text-muted-foreground/70" title="Бинарный файл — diff не считается">
+                                    bin
+                                  </span>
+                                )}
+                                {typeof diff === 'object' && diff?.skipped === 'too-large' && (
+                                  <span className="text-muted-foreground/70" title="Файл слишком большой">
+                                    ≫
+                                  </span>
+                                )}
+                                {typeof diff === 'object' && diff?.skipped === 'no-local' && diff.ins > 0 && (
+                                  <span className="text-emerald-400" title={`Файла нет локально: ${diff.ins} строк на проде`}>
+                                    +{diff.ins}
+                                  </span>
+                                )}
+                                {typeof diff === 'object' && !diff?.skipped && (
+                                  <>
+                                    {diff.ins > 0 && (
+                                      <span className="text-emerald-400" title={`+${diff.ins} строк`}>
+                                        +{diff.ins}
+                                      </span>
+                                    )}
+                                    {diff.del > 0 && (
+                                      <span className="text-rose-400" title={`−${diff.del} строк`}>
+                                        −{diff.del}
+                                      </span>
+                                    )}
+                                    {diff.ins === 0 && diff.del === 0 && (
+                                      <span className="text-muted-foreground/60" title="Идентично локальной копии">=</span>
+                                    )}
+                                  </>
+                                )}
+                              </span>
+                            )}
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                );
+              })()}
+            </CardContent>
+          </Card>
+        ) : (
+          <Card>
+            <CardHeader>
+              <CardTitle>История файла</CardTitle>
+              <CardDescription>
+                {selected ? selected.path : 'Выберите файл слева, чтобы увидеть всю историю.'}
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {!selected ? (
+                <div className="rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
+                  Здесь появятся авторы, даты изменений и версии выбранного файла.
+                </div>
+              ) : historyLoading ? (
+                <div className="py-8 text-center text-sm text-muted-foreground">Загрузка истории…</div>
+              ) : fileHistory.length === 0 ? (
+                <div className="py-8 text-center text-sm text-muted-foreground">История файла пуста.</div>
+              ) : (
+                <ul className="space-y-3">
+                  {fileHistory.map((h) => (
+                    <li key={h.sha} className="rounded-lg border border-border bg-muted/10 p-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-medium">
+                            {parseAuthorMessage(h.message)}
+                          </div>
+                          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                            <span>{h.authorName}</span>
+                            <span>·</span>
+                            <span>{formatRelativeTime(h.timestamp)}</span>
+                            <code className="rounded bg-muted/40 px-1.5 py-0.5 font-mono text-[10px]">
+                              {h.shortSha || shortSha(h.sha)}
+                            </code>
+                          </div>
+                          <div className="mt-2 flex items-center gap-2 text-xs">
+                            <Badge variant="secondary">{changeTypeLabel(h.changeType)}</Badge>
+                            <span className="text-emerald-400">+{h.insertions}</span>
+                            <span className="text-destructive">-{h.deletions}</span>
+                          </div>
+                        </div>
+                        <div className="flex shrink-0 gap-1">
+                          <Button variant="ghost" size="sm" title="Открыть эту версию" onClick={() => openFile(selected, h.sha)}>
+                            <ExternalLink className="h-4 w-4" />
+                          </Button>
+                          <Button variant="ghost" size="sm" title="Скачать эту версию" onClick={() => downloadFile(selected, h.sha)}>
+                            <Download className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </CardContent>
+          </Card>
+        )}
       </div>
     </div>
 
@@ -2177,6 +2810,65 @@ function FileBrowser({
       serverHeavyPaths={serverHeavyPaths}
       serverJunkDirs={serverJunkDirs}
     />
+
+    {ctxMenu && (() => {
+      const synced = ctxMenu.status === 'synced';
+      const modified = ctxMenu.status === 'modified';
+      const hasLocal = synced || modified;
+      // Поджимаем меню к краю окна, чтобы не уезжало за вьюпорт.
+      const w = 240;
+      const h = 124;
+      const x = Math.min(ctxMenu.x, window.innerWidth - w - 4);
+      const y = Math.min(ctxMenu.y, window.innerHeight - h - 4);
+      const fakeEntry: TreeEntry = {
+        path: ctxMenu.relPath,
+        name: ctxMenu.name,
+        type: 'file',
+        size: null,
+      };
+      return (
+        <div
+          className="fixed z-50 min-w-[240px] overflow-hidden rounded-md border border-border bg-popover shadow-2xl"
+          style={{ left: x, top: y }}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <button
+            className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm hover:bg-accent/40"
+            onClick={() => {
+              void toggleHeavyMark(ctxMenu.relPath);
+              setCtxMenu(null);
+            }}
+          >
+            <Database className="h-4 w-4 text-amber-400/90" />
+            <span>{ctxMenu.isHeavyMarked ? 'Убрать из хранилища данных' : 'Пометить как данные'}</span>
+          </button>
+          <button
+            className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm hover:bg-accent/40"
+            onClick={() => {
+              void openFile(fakeEntry);
+              setCtxMenu(null);
+            }}
+          >
+            <ExternalLink className="h-4 w-4 text-muted-foreground" />
+            <span>Открыть</span>
+          </button>
+          <button
+            className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm hover:bg-accent/40"
+            onClick={() => {
+              void refreshFileLocally(fakeEntry);
+              setCtxMenu(null);
+            }}
+          >
+            {hasLocal ? (
+              <RefreshCw className="h-4 w-4 text-emerald-400/90" />
+            ) : (
+              <Download className="h-4 w-4 text-emerald-400/90" />
+            )}
+            <span>{hasLocal ? 'Обновить файл' : 'Скачать'}</span>
+          </button>
+        </div>
+      );
+    })()}
     </>
   );
 }

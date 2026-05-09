@@ -11,6 +11,10 @@ import { useAppStore } from '@/store/app-store';
 import { AlertCircle, Cloud, Plus, Server, Trash2, FolderGit2, ShieldCheck, Copy, ChevronRight, HardDrive, ChevronUp, Folder, FileText, Loader2, Pencil, Check, X } from 'lucide-react';
 import { copyToClipboard, formatRelativeTime } from '@/lib/utils';
 import { MIN_SERVER_VERSION, isOlderThan, buildUpdateCommand } from '@/lib/server-version';
+import {
+  ServerOutdatedModal,
+  useServerVersionGate,
+} from '@/components/server-outdated-modal';
 
 interface ProjectRow {
   id: string;
@@ -39,6 +43,7 @@ export const ServerPage = () => {
   const addToast = useAppStore((s) => s.addToast);
 
   const server = servers.find((s) => s.id === serverId);
+  const gate = useServerVersionGate(serverId);
   const [projects, setProjects] = React.useState<ProjectRow[]>([]);
   const [loading, setLoading] = React.useState(false);
 
@@ -475,6 +480,21 @@ export const ServerPage = () => {
           </div>
         </div>
       </Dialog>
+
+      {/* Version-gate: блокируем работу с устаревшим хостом до апдейта. */}
+      <ServerOutdatedModal
+        open={gate.status === 'outdated'}
+        onClose={() => nav('/dashboard')}
+        server={server ? { id: server.id, url: server.url, name: server.name } : null}
+        current={gate.current}
+        expected={gate.expected}
+        onUpdated={() => {
+          gate.refetch();
+          // После апдейта стоит перезагрузить и список проектов: на новом
+          // сервере могли появиться поля/фичи, которые мы фильтровали.
+          void load();
+        }}
+      />
     </div>
   );
 };

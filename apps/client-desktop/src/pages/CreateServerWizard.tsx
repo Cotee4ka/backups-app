@@ -67,6 +67,29 @@ export const CreateServerWizard = () => {
         adminUsername: string;
         adminPassword: string;
       };
+      // Version-gate: после успешной установки версия на хосте обязана
+      // совпасть с ожидаемой клиентом. Если нет — это баг релиза (мы ставили
+      // не тот образ). Удаляем сервер из стора и не пускаем дальше.
+      const verify = (await window.backupsApp.servers.verifyCurrent(res.server.id)) as
+        | { ok: true }
+        | {
+            ok: false;
+            reason: 'outdated' | 'unreachable';
+            current?: string;
+            expected: string;
+            error?: string;
+          };
+      if (!verify.ok) {
+        await window.backupsApp.servers.delete(res.server.id);
+        await refresh();
+        const msg =
+          verify.reason === 'outdated'
+            ? `После установки версия на хосте (${verify.current ?? '?'}) ниже ожидаемой (${verify.expected}). Проверь, что в registry лежит актуальный образ.`
+            : `Сервер недоступен после установки: ${verify.error ?? 'неизвестно'}`;
+        setLogs((l) => [...l, { type: 'stderr', line: msg }]);
+        addToast({ type: 'error', text: msg });
+        return;
+      }
       setResult(res);
       setStep('done');
       addToast({ type: 'success', text: 'Сервер запущен и подключён' });

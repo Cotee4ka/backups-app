@@ -17,7 +17,7 @@ import { auditRoutes } from './routes/audit.js';
 import { inviteRoutes } from './routes/invites.js';
 import { gitHttpRoutes } from './git/http.js';
 import { countUsers, hashPassword, upsertBootstrapUser } from './auth.js';
-import { SERVER_VERSION, SERVER_FEATURES } from './version.js';
+import { SERVER_VERSION, SERVER_FEATURES, INSTALL_SCRIPT_VERSION } from './version.js';
 
 async function bootstrap() {
   fs.mkdirSync(config.dataDir, { recursive: true });
@@ -54,6 +54,7 @@ async function bootstrap() {
   app.get('/api/health', async () => ({
     ok: true,
     version: SERVER_VERSION,
+    installScriptVersion: INSTALL_SCRIPT_VERSION,
     features: SERVER_FEATURES,
     fingerprint: tls?.fingerprint ?? null,
   }));
@@ -64,6 +65,7 @@ async function bootstrap() {
     if (!fp && fs.existsSync(fpPath)) fp = fs.readFileSync(fpPath, 'utf8').trim();
     return {
       version: SERVER_VERSION,
+      installScriptVersion: INSTALL_SCRIPT_VERSION,
       features: SERVER_FEATURES,
       tls: !!tls,
       fingerprint: fp,
@@ -73,6 +75,7 @@ async function bootstrap() {
 
   app.get('/api/version', async () => ({
     version: SERVER_VERSION,
+    installScriptVersion: INSTALL_SCRIPT_VERSION,
     features: SERVER_FEATURES,
   }));
 
