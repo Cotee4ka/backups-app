@@ -29,12 +29,53 @@ const api = {
     delete: (id: string) => ipcRenderer.invoke('servers:delete', id),
     rename: (id: string, name: string) => ipcRenderer.invoke('servers:rename', { serverId: id, name }),
     checkVersion: (id: string) => ipcRenderer.invoke('servers:checkVersion', { serverId: id }),
+    verifyCurrent: (id: string) => ipcRenderer.invoke('servers:verifyCurrent', { serverId: id }),
     onInstallLog: (cb: (msg: { line: string; type: 'stdout' | 'stderr' | 'info' }) => void) => {
       const sub = (_e: unknown, msg: { line: string; type: 'stdout' | 'stderr' | 'info' }) =>
         cb(msg);
       ipcRenderer.on('servers:install:log', sub);
       return () => {
         ipcRenderer.removeListener('servers:install:log', sub);
+      };
+    },
+  },
+  // ---------- v2 installer (used by ConnectServerWizard + version-gate) ----------
+  installer: {
+    check: (params: {
+      sshHost: string;
+      sshPort: number;
+      sshUser: string;
+      sshPassword: string;
+    }) => ipcRenderer.invoke('installer:check', params),
+    apply: (params: {
+      sshHost: string;
+      sshPort: number;
+      sshUser: string;
+      sshPassword: string;
+      serverPort: number;
+      adminUser?: string;
+      publicUrl?: string;
+      imageRef?: string;
+      autoConnect?: boolean;
+    }) => ipcRenderer.invoke('installer:apply', params),
+    installSshKey: (params: {
+      sshHost: string;
+      sshPort: number;
+      sshUser: string;
+      sshPassword: string;
+      publicKey: string;
+    }) => ipcRenderer.invoke('installer:installSshKey', params),
+    onProgress: (
+      cb: (p: {
+        type: 'phase' | 'stdout' | 'stderr' | 'info';
+        phase?: string;
+        line?: string;
+      }) => void,
+    ) => {
+      const sub = (_e: unknown, p: Parameters<typeof cb>[0]) => cb(p);
+      ipcRenderer.on('installer:progress', sub);
+      return () => {
+        ipcRenderer.removeListener('installer:progress', sub);
       };
     },
   },
@@ -114,6 +155,12 @@ const api = {
         path: pathInRepo,
         ref,
       }),
+    diffStats: (serverId: string, projectId: string, pathInRepo: string) =>
+      ipcRenderer.invoke('externalSync:diffStats', {
+        serverId,
+        projectId,
+        path: pathInRepo,
+      }),
     run: (params: {
       serverId: string;
       projectId: string;
@@ -131,6 +178,12 @@ const api = {
       excludedPaths?: string[];
       manualHeavyPaths?: string[];
     }) => ipcRenderer.invoke('externalSync:setRules', params),
+    setUiOverride: (params: {
+      serverId: string;
+      projectId: string;
+      key: 'foldersBottom' | 'dataFilesBottom' | 'changeFeedAfterSyncOnly' | 'changeFeedShowDiff';
+      value: boolean | null;
+    }) => ipcRenderer.invoke('externalSync:setUiOverride', params),
     onProgress: (
       cb: (p: {
         serverId: string;

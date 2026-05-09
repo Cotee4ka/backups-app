@@ -24,3 +24,13 @@ export const WS_PATH = '/ws';
 export const GIT_HTTP_PATH = '/git';
 
 export const API_PATH = '/api';
+
+/**
+ * Версия серверной части и установочного скрипта, которую ОЖИДАЕТ клиент.
+ * Клиент сравнивает её с тем, что фактически крутится на хосте, и если
+ * хост отстаёт — блокирует подключение, предлагая обновиться через SSH.
+ *
+ * Бампать СИНХРОННО с `apps/server/src/version.ts` при выпуске релиза.
+ */
+export const EXPECTED_SERVER_VERSION = '0.4.0';
+export const EXPECTED_INSTALL_SCRIPT_VERSION = '0.4.0';

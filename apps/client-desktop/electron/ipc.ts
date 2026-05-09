@@ -3,6 +3,10 @@ import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
 import AutoLaunch from 'auto-launch';
+import {
+  EXPECTED_SERVER_VERSION,
+  EXPECTED_INSTALL_SCRIPT_VERSION,
+} from '@backups-app/shared';
 import { getServerStore, type StoredServer } from './store';
 import { ApiClient, loginToServer, registerOnServer } from './api-client';
 import {
@@ -305,6 +309,21 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   );
 
   ipcMain.handle(
+    'externalSync:diffStats',
+    async (
+      _e,
+      {
+        serverId,
+        projectId,
+        path: p,
+      }: { serverId: string; projectId: string; path: string },
+    ) => {
+      const { diffStatsFor } = await import('./local-sync-ops');
+      return diffStatsFor(serverId, projectId, p);
+    },
+  );
+
+  ipcMain.handle(
     'externalSync:detectDataStore',
     async (_e, { serverId, projectId }: { serverId: string; projectId: string }) => {
       // Серверная автодетекция (есть только в server >= 0.2.0).
@@ -332,6 +351,214 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     },
   );
 
+  /**
+   * Version gate: сверяет версию хоста (по /api/version) с тем, что ожидает
+   * клиент (`EXPECTED_SERVER_VERSION`). Используется UI для блокировки
+   * входа на устаревший хост.
+   *
+   * Возвращает `{ ok: true }` если хост актуален, иначе
+   * `{ ok: false, reason, current, expected }`. Сетевую ошибку трактуем как
+   * `unreachable` — даём UI решать что показывать.
+   */
+  ipcMain.handle(
+    'servers:verifyCurrent',
+    async (_e, { serverId }: { serverId: string }) => {
+      try {
+        const v = (await new ApiClient(serverId).getServerVersion()) as {
+          version: string;
+          installScriptVersion?: string;
+          features?: string[];
+        };
+        const cmpServer = compareSemver(v.version ?? '0.0.0', EXPECTED_SERVER_VERSION);
+        const cmpScript = v.installScriptVersion
+          ? compareSemver(v.installScriptVersion, EXPECTED_INSTALL_SCRIPT_VERSION)
+          : -1; // нет поля — считаем устаревшим (старая версия сервера)
+        if (cmpServer >= 0 && cmpScript >= 0) {
+          return {
+            ok: true as const,
+            current: v.version,
+            currentScript: v.installScriptVersion ?? null,
+            expected: EXPECTED_SERVER_VERSION,
+            expectedScript: EXPECTED_INSTALL_SCRIPT_VERSION,
+          };
+        }
+        return {
+          ok: false as const,
+          reason: 'outdated' as const,
+          current: v.version ?? '0.0.0',
+          currentScript: v.installScriptVersion ?? null,
+          expected: EXPECTED_SERVER_VERSION,
+          expectedScript: EXPECTED_INSTALL_SCRIPT_VERSION,
+        };
+      } catch (e) {
+        return {
+          ok: false as const,
+          reason: 'unreachable' as const,
+          error: (e as Error).message,
+          expected: EXPECTED_SERVER_VERSION,
+          expectedScript: EXPECTED_INSTALL_SCRIPT_VERSION,
+        };
+      }
+    },
+  );
+
+  // ============================================================
+  //  v2 installer — раздельные SSH-операции check/apply.
+  //  Используются ConnectServerWizard'ом и version-gate'ом для
+  //  обновления устаревшего хоста.
+  // ============================================================
+
+  ipcMain.handle(
+    'installer:check',
+    async (
+      _e,
+      params: {
+        sshHost: string;
+        sshPort: number;
+        sshUser: string;
+        sshPassword: string;
+      },
+    ) => {
+      const { findInstallScriptV2, checkRemoteHost } = await import('./ssh-installer');
+      const installScriptPath = findInstallScriptV2();
+      const win = getWin();
+      const result = await checkRemoteHost(
+        {
+          host: params.sshHost,
+          port: params.sshPort ?? 22,
+          username: params.sshUser,
+          password: params.sshPassword,
+          installScriptPath,
+        },
+        (p) => {
+          win?.webContents.send('installer:progress', p);
+        },
+      );
+      // Дополним результат планом, который посчитан клиентом — UI сразу
+      // видит, что нужно делать.
+      const plan = computeInstallPlan(result);
+      return { ...result, plan, expected: { server: EXPECTED_SERVER_VERSION, script: EXPECTED_INSTALL_SCRIPT_VERSION } };
+    },
+  );
+
+  ipcMain.handle(
+    'installer:apply',
+    async (
+      _e,
+      params: {
+        sshHost: string;
+        sshPort: number;
+        sshUser: string;
+        sshPassword: string;
+        serverPort: number;
+        adminUser?: string;
+        publicUrl?: string;
+        imageRef?: string;
+        /** Если true — после успешного apply сразу логинимся и сохраняем сервер. */
+        autoConnect?: boolean;
+      },
+    ) => {
+      const { findInstallScriptV2, applyRemoteHost } = await import('./ssh-installer');
+      const installScriptPath = findInstallScriptV2();
+      const win = getWin();
+      const applied = await applyRemoteHost(
+        {
+          host: params.sshHost,
+          port: params.sshPort ?? 22,
+          username: params.sshUser,
+          password: params.sshPassword,
+          serverPort: params.serverPort ?? 8443,
+          adminUser: params.adminUser ?? 'owner',
+          publicUrl: params.publicUrl,
+          imageRef: params.imageRef,
+          targetVersion: EXPECTED_SERVER_VERSION,
+          installScriptPath,
+        },
+        (p) => {
+          win?.webContents.send('installer:progress', p);
+        },
+      );
+
+      if (!params.autoConnect) {
+        return { applied, server: null };
+      }
+
+      // Сохраняем pending fingerprint и логинимся (или регистрируемся).
+      const origin = new URL(applied.serverUrl).origin;
+      getServerStore().setPendingFingerprint(origin, applied.fingerprint);
+
+      let auth;
+      try {
+        auth = await registerOnServer({
+          url: applied.serverUrl,
+          fingerprint: applied.fingerprint,
+          username: applied.adminUsername,
+          password: applied.adminPassword,
+        });
+      } catch {
+        auth = await loginToServer({
+          url: applied.serverUrl,
+          fingerprint: applied.fingerprint,
+          username: applied.adminUsername,
+          password: applied.adminPassword,
+        });
+      }
+
+      const stored: StoredServer = {
+        id: crypto.randomUUID(),
+        name: new URL(applied.serverUrl).hostname,
+        url: applied.serverUrl,
+        origin,
+        fingerprint: applied.fingerprint,
+        username: auth.user.username,
+        accessToken: auth.tokens.accessToken,
+        refreshToken: auth.tokens.refreshToken,
+        accessExpiresAt: auth.tokens.accessExpiresAt,
+        refreshExpiresAt: auth.tokens.refreshExpiresAt,
+        lastConnectedAt: Date.now(),
+        syncedFolders: [],
+      };
+      getServerStore().upsertServer(stored);
+      getServerStore().clearPendingFingerprint(origin);
+      ensureConnection(stored.id);
+
+      return {
+        applied,
+        server: stripSecrets(stored),
+        adminUsername: applied.adminUsername,
+        adminPassword: applied.adminPassword,
+      };
+    },
+  );
+
+  ipcMain.handle(
+    'installer:installSshKey',
+    async (
+      _e,
+      params: {
+        sshHost: string;
+        sshPort: number;
+        sshUser: string;
+        sshPassword: string;
+        publicKey: string;
+      },
+    ) => {
+      const { installSshPublicKey } = await import('./ssh-installer');
+      const win = getWin();
+      await installSshPublicKey(
+        {
+          host: params.sshHost,
+          port: params.sshPort ?? 22,
+          username: params.sshUser,
+          password: params.sshPassword,
+        },
+        params.publicKey,
+        (p) => win?.webContents.send('installer:progress', p),
+      );
+      return { ok: true };
+    },
+  );
+
   ipcMain.handle(
     'externalSync:setRules',
     async (
@@ -352,6 +579,44 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
         manualPaths: params.manualPaths ?? existing.manualPaths,
         excludedPaths: params.excludedPaths ?? existing.excludedPaths,
         manualHeavyPaths: params.manualHeavyPaths ?? existing.manualHeavyPaths ?? [],
+      });
+      return store.getExternalSync(params.serverId, params.projectId);
+    },
+  );
+
+  ipcMain.handle(
+    'externalSync:setUiOverride',
+    async (
+      _e,
+      params: {
+        serverId: string;
+        projectId: string;
+        key: 'foldersBottom' | 'dataFilesBottom' | 'changeFeedAfterSyncOnly' | 'changeFeedShowDiff';
+        /** boolean — выставить переопределение, null — сбросить (наследовать от глобала). */
+        value: boolean | null;
+      },
+    ) => {
+      const store = getServerStore();
+      const existing = store.getExternalSync(params.serverId, params.projectId);
+      // На внешний проект ExternalSync создаётся при первом синке. До этого
+      // момента переопределений нет — храним их вместе с заглушкой записи,
+      // чтобы юзер мог настроить тогглы заранее.
+      const base = existing ?? {
+        projectId: params.projectId,
+        localPath: '',
+        excludedPaths: [],
+        manualPaths: [],
+        manualHeavyPaths: [],
+      };
+      const overrides = { ...(base.uiOverrides ?? {}) };
+      if (params.value === null) {
+        delete overrides[params.key];
+      } else {
+        overrides[params.key] = params.value;
+      }
+      store.setExternalSync(params.serverId, {
+        ...base,
+        uiOverrides: Object.keys(overrides).length > 0 ? overrides : undefined,
       });
       return store.getExternalSync(params.serverId, params.projectId);
     },
@@ -540,4 +805,69 @@ function stripSecrets(s: StoredServer) {
     lastConnectedAt: s.lastConnectedAt,
     syncedFolders: s.syncedFolders,
   };
+}
+
+/**
+ * Сравнение semver-строк. Возвращает -1/0/+1 как стандартный compareFn.
+ * Префикс 'v' обрезается, нечисловые сегменты считаются 0. Этого
+ * достаточно для наших версий вида X.Y.Z.
+ */
+function compareSemver(a: string, b: string): number {
+  const norm = (v: string) =>
+    v
+      .replace(/^v/i, '')
+      .split(/[.+-]/, 4)
+      .slice(0, 3)
+      .map((p) => {
+        const n = parseInt(p, 10);
+        return Number.isFinite(n) ? n : 0;
+      });
+  const av = norm(a);
+  const bv = norm(b);
+  for (let i = 0; i < 3; i++) {
+    const ai = av[i] ?? 0;
+    const bi = bv[i] ?? 0;
+    if (ai !== bi) return ai > bi ? 1 : -1;
+  }
+  return 0;
+}
+
+/**
+ * На основании check-результата с хоста и ожидаемой клиентом версии решает,
+ * что нужно делать: full-install / script-update / image-update / nothing.
+ */
+function computeInstallPlan(check: {
+  installed: boolean;
+  scriptVersion: string;
+  serverVersion: string;
+  containerRunning: boolean;
+}): {
+  action: 'full-install' | 'script-update' | 'image-update' | 'restart' | 'nothing';
+  reason: string;
+} {
+  if (!check.installed) {
+    return { action: 'full-install', reason: 'Хост ещё не настраивался' };
+  }
+  const scriptCmp = check.scriptVersion
+    ? compareSemver(check.scriptVersion, EXPECTED_INSTALL_SCRIPT_VERSION)
+    : -1;
+  if (scriptCmp < 0) {
+    return {
+      action: 'script-update',
+      reason: `Скрипт ${check.scriptVersion || '0.0.0'} < ${EXPECTED_INSTALL_SCRIPT_VERSION}`,
+    };
+  }
+  const serverCmp = check.serverVersion
+    ? compareSemver(check.serverVersion, EXPECTED_SERVER_VERSION)
+    : -1;
+  if (serverCmp < 0) {
+    return {
+      action: 'image-update',
+      reason: `Сервер ${check.serverVersion || '0.0.0'} < ${EXPECTED_SERVER_VERSION}`,
+    };
+  }
+  if (!check.containerRunning) {
+    return { action: 'restart', reason: 'Контейнер не запущен' };
+  }
+  return { action: 'nothing', reason: 'Хост актуален' };
 }
