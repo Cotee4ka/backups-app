@@ -1,6 +1,7 @@
 import { app, safeStorage } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import crypto from 'node:crypto';
 
 /**
@@ -177,6 +178,50 @@ class Store {
     const tmp = this.file + '.tmp';
     fs.writeFileSync(tmp, out);
     fs.renameSync(tmp, this.file);
+    this.writeCredentialsBridge();
+  }
+
+  /**
+   * Сбрасывает usable-без-Electron'а копию серверных кредов в
+   * ~/.backups-app/credentials.json. Это нужно хук-скриптам Claude Code и
+   * MCP-серверу — у них нет доступа к safeStorage и к нашему зашифрованному
+   * Electron-store'у. Файл хранит только то, что нужно для API-вызовов:
+   * URL, fingerprint, JWT-пара. Безопасностно: 0600 + ~/ под пользователем.
+   *
+   * Перезаписывается на каждом save() — токены синхронизируются автоматически
+   * после рефреша.
+   */
+  private writeCredentialsBridge(): void {
+    try {
+      const dir = path.join(os.homedir(), '.backups-app');
+      fs.mkdirSync(dir, { recursive: true });
+      const file = path.join(dir, 'credentials.json');
+      const tmp = file + '.tmp';
+      const payload = {
+        writtenAt: Date.now(),
+        servers: this.data.servers.map((s) => ({
+          id: s.id,
+          url: s.url,
+          origin: s.origin,
+          fingerprint: s.fingerprint,
+          username: s.username,
+          accessToken: s.accessToken,
+          refreshToken: s.refreshToken,
+          accessExpiresAt: s.accessExpiresAt,
+          refreshExpiresAt: s.refreshExpiresAt,
+          kind: s.kind ?? 'projects',
+        })),
+      };
+      fs.writeFileSync(tmp, JSON.stringify(payload, null, 2));
+      fs.renameSync(tmp, file);
+      try {
+        fs.chmodSync(file, 0o600);
+      } catch {
+        /* Windows не всегда уважает chmod, окей */
+      }
+    } catch (e) {
+      console.error('[store] credentials bridge write failed:', e);
+    }
   }
 
   // --- Local account ---

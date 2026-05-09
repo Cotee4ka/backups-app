@@ -107,6 +107,10 @@
         "to": "install-projects.sh"
       },
       {
+        "from": "resources/coord-hooks",
+        "to": "coord-hooks"
+      },
+      {
         "from": "../../package.json",
         "to": "server-source/package.json"
       },

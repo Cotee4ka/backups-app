@@ -13,6 +13,11 @@ import {
 } from '@backups-app/shared';
 import { getServerStore } from './store';
 import { ApiClient } from './api-client';
+import {
+  installForProject as installCoordHooks,
+  uninstallForProject as uninstallCoordHooks,
+  findHookScriptPaths,
+} from './coord-installer';
 
 /**
  * Sync engine — chokidar watcher + батчевые git push.
@@ -299,6 +304,27 @@ export async function startSync(params: {
   const cfg = await readProjectConfig(params.localPath);
   ps.customIgnore = cfg.ignore ?? [];
 
+  // Координация Claude-агентов: ставим .claude/settings.local.json с PreToolUse
+  // и Stop хуками + блок в CLAUDE.md. Per-project, никаких глобальных правок.
+  // Best-effort — провал установки не должен ломать sync.
+  try {
+    const hooks = findHookScriptPaths();
+    if (hooks) {
+      installCoordHooks({
+        projectDir: params.localPath,
+        serverId: params.serverId,
+        projectId: params.projectId,
+        projectName: params.projectName,
+        hookCheckPath: hooks.check,
+        hookReleasePath: hooks.release,
+      });
+    } else {
+      console.warn('[sync] coord hook scripts not found, skipping installation');
+    }
+  } catch (e) {
+    console.warn('[sync] coord install failed:', e);
+  }
+
   const ignored = [...HARD_IGNORE_PATTERNS, ...ps.customIgnore];
 
   const watcher = chokidar.watch(params.localPath, {
@@ -452,6 +478,13 @@ export async function stopSync(serverId: string, projectId: string): Promise<voi
   if (ps.debounceTimer) clearTimeout(ps.debounceTimer);
   if (ps.periodicTimer) clearInterval(ps.periodicTimer);
   await ps.watcher?.close();
+  // Снимаем coord-хуки и блок CLAUDE.md, чтобы Claude'ы перестали ходить в
+  // мёртвый сервер. Best-effort.
+  try {
+    uninstallCoordHooks(ps.localPath);
+  } catch (e) {
+    console.warn('[sync] coord uninstall failed:', e);
+  }
   active.delete(k);
   getServerStore().removeSyncedFolder(serverId, projectId);
 }
