@@ -34,6 +34,26 @@ async function createWindow() {
 
   mainWindow.on('ready-to-show', () => mainWindow?.show());
 
+  // У нас полностью отключено меню (setApplicationMenu(null)), поэтому
+  // дефолтные акселераторы F12 / Ctrl+Shift+I не работают. Возвращаем
+  // их через before-input-event — нужно для отладки в production.
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    const isToggleDevTools =
+      input.key === 'F12' ||
+      (input.control && input.shift && input.key.toLowerCase() === 'i');
+    if (isToggleDevTools) {
+      mainWindow?.webContents.toggleDevTools();
+      event.preventDefault();
+      return;
+    }
+    // Ctrl+R / Ctrl+Shift+R — релоад страницы (тоже завязано на меню).
+    if (input.control && input.key.toLowerCase() === 'r') {
+      if (input.shift) mainWindow?.webContents.reloadIgnoringCache();
+      else mainWindow?.webContents.reload();
+      event.preventDefault();
+    }
+  });
+
   if (isDev && VITE_DEV_SERVER_URL) {
     await mainWindow.loadURL(VITE_DEV_SERVER_URL);
     mainWindow.webContents.openDevTools({ mode: 'detach' });
