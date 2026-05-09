@@ -485,7 +485,11 @@ export const ServerPage = () => {
       <ServerOutdatedModal
         open={gate.status === 'outdated'}
         onClose={() => nav('/dashboard')}
-        server={server ? { id: server.id, url: server.url, name: server.name } : null}
+        server={
+          server
+            ? { id: server.id, url: server.url, name: server.name, kind: server.kind }
+            : null
+        }
         current={gate.current}
         expected={gate.expected}
         onUpdated={() => {

@@ -12,8 +12,17 @@ import {
 } from 'lucide-react';
 import { copyToClipboard } from '@/lib/utils';
 
-const UPDATE_COMMAND =
-  'curl -fsSL https://raw.githubusercontent.com/Cotee4ka/backups-app/main/apps/server/scripts/install-v2.sh | sudo bash -s -- --apply';
+// Команда апдейта зависит от типа сервера:
+//   * Mode 1 (kind='projects', «Создать сервер») — install-projects.sh.
+//   * Mode 2 (kind='prod',     «Подключиться к проде») — install-v2.sh.
+const UPDATE_COMMAND_BASE =
+  'curl -fsSL https://raw.githubusercontent.com/Cotee4ka/backups-app/main/apps/server/scripts/';
+const UPDATE_COMMAND_TAIL = ' | sudo bash -s -- --apply';
+
+function buildUpdateCommand(kind: 'projects' | 'prod' | undefined): string {
+  const script = kind === 'prod' ? 'install-v2.sh' : 'install-projects.sh';
+  return `${UPDATE_COMMAND_BASE}${script}${UPDATE_COMMAND_TAIL}`;
+}
 
 interface Props {
   open: boolean;
@@ -23,6 +32,8 @@ interface Props {
     id: string;
     url: string;
     name?: string;
+    /** Mode 1 ('projects') vs Mode 2 ('prod') — определяет, какой скрипт показать в команде. */
+    kind?: 'projects' | 'prod';
   } | null;
   current: string | undefined;
   expected: string;
@@ -87,6 +98,12 @@ export const ServerOutdatedModal = ({
 
   if (!server) return null;
 
+  const updateCommand = buildUpdateCommand(server.kind);
+  const modeLabel =
+    server.kind === 'prod'
+      ? 'Mode 2 — read-only mirror с проды (install-v2.sh)'
+      : 'Mode 1 — двухсторонняя git-синхронизация (install-projects.sh)';
+
   return (
     <Dialog
       open={open}
@@ -107,6 +124,9 @@ export const ServerOutdatedModal = ({
             <div className="text-muted-foreground text-xs">
               Адрес: <span className="font-mono">{server.url}</span>
             </div>
+            <div className="text-muted-foreground text-xs">
+              Тип: <span className="text-foreground/80">{modeLabel}</span>
+            </div>
           </div>
         </div>
 
@@ -117,12 +137,12 @@ export const ServerOutdatedModal = ({
           </div>
           <div className="flex items-center gap-2">
             <code className="flex-1 rounded bg-background/60 px-3 py-2 font-mono text-[11px] text-foreground/80 break-all">
-              {UPDATE_COMMAND}
+              {updateCommand}
             </code>
             <button
               className="shrink-0 rounded p-2 hover:bg-accent transition-colors"
               title="Скопировать"
-              onClick={() => copyToClipboard(UPDATE_COMMAND)}
+              onClick={() => copyToClipboard(updateCommand)}
             >
               <Copy className="h-3.5 w-3.5 text-muted-foreground" />
             </button>
