@@ -13,6 +13,31 @@ function gitFor(repo: string): SimpleGit {
   return simpleGit({ baseDir: repo });
 }
 
+/**
+ * Slugify имени проекта для имени worktree-папки. Оставляем латиницу/цифры
+ * и `-`, остальное → `-`. Кириллицу транслитерировать не будем — просто
+ * нормализуем в lowercase (`encodeURIComponent` сделает кириллицу процентами,
+ * мы их выкинем). Если имя пустое после нормализации, fallback на `project`.
+ */
+function slugify(name: string): string {
+  const trimmed = (name || '').trim().toLowerCase();
+  const safe = trimmed
+    .replace(/[^\w\d-]+/gu, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+  return safe || 'project';
+}
+
+/**
+ * Путь к worktree-зеркалу проекта. Имя папки — `<slug>-<short8>` чтобы
+ * читалось при `ls /srv/projects/` и не коллизилось при дубликате имён.
+ */
+export function worktreePath(projectId: string, projectName: string): string {
+  const slug = slugify(projectName);
+  const short = projectId.replace(/-/g, '').slice(0, 8);
+  return path.join(config.worktreesDir, `${slug}-${short}`);
+}
+
 export async function ensureRepo(projectId: string): Promise<string> {
   const repo = repoPath(projectId);
   try {
@@ -25,9 +50,82 @@ export async function ensureRepo(projectId: string): Promise<string> {
   return repo;
 }
 
+/**
+ * Создаёт (или обновляет) worktree-зеркало проекта и устанавливает
+ * post-receive хук в bare-репо. Безопасно вызывать многократно: если
+ * worktree уже есть, мы просто переустанавливаем хук (идемпотентно).
+ *
+ * Worktree пустой до первого push'а — так и должно быть (после init
+ * в bare-репо нет ни одного коммита, чекаут будет no-op).
+ */
+export async function ensureWorktreeMirror(
+  projectId: string,
+  projectName: string,
+): Promise<string> {
+  const repo = await ensureRepo(projectId);
+  const work = worktreePath(projectId, projectName);
+  await fs.mkdir(config.worktreesDir, { recursive: true });
+  await fs.mkdir(work, { recursive: true });
+
+  // Hook: после успешного push в bare-репо переключаем worktree на свежий HEAD.
+  // GIT_DIR указывает на bare, GIT_WORK_TREE — куда чекаутить файлы.
+  const hookPath = path.join(repo, 'hooks', 'post-receive');
+  const hookBody = [
+    '#!/usr/bin/env bash',
+    '# Backups App: автоматический worktree-mirror.',
+    '# Обновляет рабочую копию в /data/worktrees/... после каждого push.',
+    '# Сгенерировано сервером — НЕ редактировать, перезаписывается на старте.',
+    'set -eu',
+    `WORKTREE=${shellEscape(work)}`,
+    'unset GIT_DIR GIT_WORK_TREE GIT_QUARANTINE_PATH',
+    'mkdir -p "$WORKTREE"',
+    `cd ${shellEscape(repo)}`,
+    '# Чекаут default-ветки. Если репо пустой (refs/heads/main отсутствует)',
+    '# — checkout молча падает, не валим push.',
+    'git --work-tree="$WORKTREE" checkout -f main 2>/dev/null || true',
+    '',
+  ].join('\n');
+  await fs.writeFile(hookPath, hookBody, { mode: 0o755 });
+  // На всякий случай проставляем executable явно (writeFile mode не везде работает на Linux под shared volume).
+  try {
+    await fs.chmod(hookPath, 0o755);
+  } catch {
+    /* ignore */
+  }
+
+  return work;
+}
+
+function shellEscape(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
 export async function deleteRepo(projectId: string): Promise<void> {
   const repo = repoPath(projectId);
   await fs.rm(repo, { recursive: true, force: true });
+}
+
+/**
+ * Удаление worktree-зеркала. Имя слага мы можем не помнить (проект уже
+ * удалён из БД к моменту очистки), поэтому берём все папки в
+ * worktreesDir и удаляем те, что заканчиваются на `-<short8>` нашего id.
+ */
+export async function deleteWorktreeMirror(projectId: string): Promise<void> {
+  const short = projectId.replace(/-/g, '').slice(0, 8);
+  let entries: string[];
+  try {
+    entries = await fs.readdir(config.worktreesDir);
+  } catch {
+    return;
+  }
+  for (const name of entries) {
+    if (name.endsWith(`-${short}`)) {
+      await fs.rm(path.join(config.worktreesDir, name), {
+        recursive: true,
+        force: true,
+      });
+    }
+  }
 }
 
 export async function repoExists(projectId: string): Promise<boolean> {

@@ -23,6 +23,7 @@ async function bootstrap() {
   fs.mkdirSync(config.dataDir, { recursive: true });
   fs.mkdirSync(config.reposDir, { recursive: true });
   fs.mkdirSync(config.certsDir, { recursive: true });
+  fs.mkdirSync(config.worktreesDir, { recursive: true });
 
   getDb();
 

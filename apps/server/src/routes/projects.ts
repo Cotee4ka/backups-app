@@ -5,6 +5,8 @@ import { requireAuth } from '../auth.js';
 import { getDb } from '../db.js';
 import {
   ensureRepo,
+  ensureWorktreeMirror,
+  deleteWorktreeMirror,
   getCommitDetail,
   listCommits,
   restoreToCommit,
@@ -118,6 +120,10 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
     tx();
 
     await ensureRepo(id);
+    // Worktree-зеркало: создаём пустую рабочую копию + post-receive hook,
+    // который обновляет её при каждом push'е. Папка появится в /srv/projects
+    // на хосте сразу — пустая до первого коммита, потом наполнится.
+    await ensureWorktreeMirror(id, body.name);
 
     return reply.send({
       project: {
@@ -241,6 +247,7 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
     getDb().prepare(`DELETE FROM projects WHERE id = ?`).run(params.id);
     if (!row.external_path) {
       await deleteRepo(params.id);
+      await deleteWorktreeMirror(params.id);
     }
     broadcastToProject(params.id, {
       type: 'project:deleted',

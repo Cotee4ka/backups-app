@@ -27,6 +27,16 @@ export const config = {
   dbPath: envOr('BACKUPS_DB_PATH', path.join(dataDir, 'backups.db')) as string,
   reposDir: envOr('BACKUPS_REPOS_DIR', path.join(dataDir, 'repos')) as string,
   certsDir: envOr('BACKUPS_CERTS_DIR', path.join(dataDir, 'certs')) as string,
+  /**
+   * Worktree-зеркала для read-friendly доступа к сурсам с хоста (Mode 1).
+   * Каждый проект получает рабочую копию в `<worktreesDir>/<safe-name>-<short-id>/`,
+   * которая обновляется post-receive хуком после каждого push'а.
+   * Install-projects.sh bind-mount'ит эту папку в `/srv/projects` на хосте.
+   */
+  worktreesDir: envOr(
+    'BACKUPS_WORKTREES_DIR',
+    path.join(dataDir, 'worktrees'),
+  ) as string,
 
   tlsEnabled: (envOr('BACKUPS_TLS', 'true') as string).toLowerCase() !== 'false',
 
