@@ -79,7 +79,9 @@ export function getDb(): Database.Database {
       FOREIGN KEY (used_by) REFERENCES users(id),
       FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
     );
-    CREATE INDEX IF NOT EXISTS idx_invites_project ON invites(project_id);
+    /* Индекс на project_id создаётся ПОСЛЕ ALTER'а ниже — на существующих
+       БД (до 0.7.0) колонка ещё не существует на этой строке, и CREATE
+       INDEX упадёт с "no such column: project_id". */
   `);
 
   // Дроп старой таблицы локов (была введена в 0.5.0 для координации Claude-агентов,

@@ -12,8 +12,8 @@
  *
  * Соглашение: бампаем синхронно с SERVER_VERSION в одном релизе.
  */
-export const SERVER_VERSION = '0.7.0';
-export const INSTALL_SCRIPT_VERSION = '0.7.0';
+export const SERVER_VERSION = '0.7.1';
+export const INSTALL_SCRIPT_VERSION = '0.7.1';
 
 /**
  * Список фич, которые добавлялись в этой версии и в более ранних. Клиент
