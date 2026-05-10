@@ -2,7 +2,7 @@ import React from 'react';
 import { Link } from 'react-router-dom';
 import { useAppStore } from '@/store/app-store';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Plus, Server, Globe, FolderGit2, Activity, Cloud } from 'lucide-react';
+import { Plus, Server, Globe, FolderGit2, Activity, Cloud, Link2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { formatRelativeTime } from '@/lib/utils';
 
@@ -37,12 +37,14 @@ export const DashboardPage = () => {
               <Cloud className="accent-fg h-8 w-8" />
             </div>
             <div>
-              <h2 className="text-xl font-semibold">Подключите первый сервер</h2>
+              <h2 className="text-xl font-semibold">С чего начнём?</h2>
               <p className="mt-1 text-sm text-muted-foreground">
-                Можно создать новый на VPS или подключиться к уже работающему.
+                Можно создать свой сервер для синка проектов, принять
+                приглашение в чужой проект, или подключиться к проде в
+                read-only.
               </p>
             </div>
-            <div className="mt-2 flex gap-2">
+            <div className="mt-2 flex flex-wrap items-center justify-center gap-2">
               <Link
                 to="/wizard/create"
                 className="accent-btn inline-flex h-10 items-center justify-center gap-2 rounded-md px-5 text-sm font-medium"
@@ -50,15 +52,42 @@ export const DashboardPage = () => {
                 <Plus className="h-4 w-4" /> Создать сервер
               </Link>
               <Link
+                to="/wizard/invite"
+                className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-emerald-400/40 bg-emerald-400/5 px-5 text-sm font-medium text-emerald-200 hover:bg-emerald-400/10"
+              >
+                <Link2 className="h-4 w-4" /> У меня есть приглашение
+              </Link>
+              <Link
                 to="/wizard/connect"
                 className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-border px-5 text-sm font-medium hover:bg-accent hover:text-accent-foreground"
               >
-                <Globe className="h-4 w-4" /> Подключиться
+                <Globe className="h-4 w-4" /> Подключиться к проде
               </Link>
             </div>
           </CardContent>
         </Card>
       ) : (
+        <>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Link
+            to="/wizard/invite"
+            className="inline-flex h-9 items-center gap-2 rounded-md border border-emerald-400/40 bg-emerald-400/5 px-3 text-xs font-medium text-emerald-200 hover:bg-emerald-400/10"
+          >
+            <Link2 className="h-3.5 w-3.5" /> По приглашению
+          </Link>
+          <Link
+            to="/wizard/create"
+            className="accent-btn inline-flex h-9 items-center gap-2 rounded-md px-3 text-xs font-medium"
+          >
+            <Plus className="h-3.5 w-3.5" /> Создать сервер
+          </Link>
+          <Link
+            to="/wizard/connect"
+            className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-xs font-medium hover:bg-accent hover:text-accent-foreground"
+          >
+            <Globe className="h-3.5 w-3.5" /> Подключиться к проде
+          </Link>
+        </div>
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {servers.map((s) => (
             <Link key={s.id} to={`/server/${s.id}`} className="group">
@@ -91,6 +120,7 @@ export const DashboardPage = () => {
             </Link>
           ))}
         </div>
+        </>
       )}
     </div>
   );

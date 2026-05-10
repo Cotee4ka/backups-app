@@ -23,13 +23,10 @@ import {
   Server,
   CheckCircle2,
   RefreshCw,
-  Link2,
-  Loader2,
 } from 'lucide-react';
 import { copyToClipboard } from '@/lib/utils';
-import { parseInviteToken } from '@/lib/invite-token';
 
-type Mode = 'ssh' | 'pair' | 'invite';
+type Mode = 'ssh' | 'pair';
 type Step = 'connection' | 'install' | 'done';
 type InstallAction =
   | 'full-install'
@@ -122,20 +119,6 @@ export const ConnectServerWizard = () => {
 
   // Pair-token form state
   const [token, setToken] = React.useState('');
-
-  // Invite-link form state
-  const [inviteRaw, setInviteRaw] = React.useState('');
-  const [inviteInfo, setInviteInfo] = React.useState<{
-    code: string;
-    role: string;
-    expiresAt: number;
-    projectId: string | null;
-    projectName: string | null;
-    url: string;
-    fingerprint: string;
-  } | null>(null);
-  const [inviteUsername, setInviteUsername] = React.useState('');
-  const [invitePassword, setInvitePassword] = React.useState('');
 
   // Process state
   const [busy, setBusy] = React.useState(false);
@@ -317,74 +300,6 @@ export const ConnectServerWizard = () => {
     }
   }
 
-  // ----------------------- INVITE-LINK FLOW -----------------------
-
-  /**
-   * Юзер вставил `bapi.…` токен → парсим, валидируем код у сервера через
-   * fingerprint-pinned запрос (без авторизации), сохраняем info — UI
-   * показывает «Вас приглашают в проект X с ролью Y» и форму регистрации.
-   */
-  async function loadInviteInfo() {
-    const parsed = parseInviteToken(inviteRaw);
-    if (!parsed) {
-      addToast({
-        type: 'error',
-        text: 'Неверная ссылка-приглашение. Проверь что скопировал её целиком.',
-      });
-      return;
-    }
-    setBusy(true);
-    try {
-      const info = await window.backupsApp.invites.info({
-        url: parsed.url,
-        fingerprint: parsed.fp,
-        code: parsed.code,
-      });
-      setInviteInfo({ ...info, url: parsed.url, fingerprint: parsed.fp });
-      // Fingerprint мы пинуем сами через TLS-pin — если info прошла, значит
-      // сервер живой и серт совпадает.
-    } catch (e) {
-      addToast({
-        type: 'error',
-        text: 'Не удалось проверить приглашение: ' + (e as Error).message,
-      });
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  /** Регистрирует юзера и принимает invite — ipc сам решит register vs login. */
-  async function submitInvite() {
-    if (!inviteInfo) return;
-    if (inviteUsername.trim().length < 3 || invitePassword.length < 8) {
-      addToast({
-        type: 'error',
-        text: 'Имя — от 3 символов, пароль — от 8.',
-      });
-      return;
-    }
-    setBusy(true);
-    try {
-      const res = await window.backupsApp.invites.joinByInvite({
-        url: inviteInfo.url,
-        fingerprint: inviteInfo.fingerprint,
-        code: inviteInfo.code,
-        username: inviteUsername.trim(),
-        password: invitePassword,
-      });
-      await refresh();
-      addToast({ type: 'success', text: 'Готово. Ты в проекте.' });
-      if (res.joinedProjectId) {
-        nav(`/server/${res.server.id}/project/${res.joinedProjectId}`);
-      } else {
-        nav(`/server/${res.server.id}`);
-      }
-    } catch (e) {
-      addToast({ type: 'error', text: (e as Error).message });
-    } finally {
-      setBusy(false);
-    }
-  }
 
   // ----------------------- RENDER -----------------------
 
@@ -405,22 +320,14 @@ export const ConnectServerWizard = () => {
 
       {step === 'connection' && (
         <>
-          <div className="flex flex-wrap gap-2">
-            <Button
-              variant={mode === 'invite' ? 'default' : 'outline'}
-              size="sm"
-              onClick={() => setMode('invite')}
-            >
-              <Link2 className="h-4 w-4" />
-              По ссылке-приглашению
-            </Button>
+          <div className="flex gap-2">
             <Button
               variant={mode === 'ssh' ? 'default' : 'outline'}
               size="sm"
               onClick={() => setMode('ssh')}
             >
               <Cloud className="h-4 w-4" />
-              Через SSH
+              Через SSH (рекомендуется)
             </Button>
             <Button
               variant={mode === 'pair' ? 'default' : 'outline'}
@@ -461,108 +368,6 @@ export const ConnectServerWizard = () => {
             />
           )}
 
-          {mode === 'invite' && (
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">Приглашение в проект</CardTitle>
-                <CardDescription>
-                  Вставь ссылку которую тебе прислал владелец проекта (начинается
-                  с <code className="font-mono">bapi.</code>). Сразу попадёшь в
-                  проект, без отдельной настройки сервера.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                {!inviteInfo ? (
-                  <>
-                    <div className="space-y-1.5">
-                      <Label htmlFor="inv">Ссылка-приглашение</Label>
-                      <textarea
-                        id="inv"
-                        className="flex min-h-[88px] w-full resize-y rounded-md border border-input bg-background px-3 py-2 font-mono text-xs shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                        placeholder="bapi.eyJ2IjoxLCJ1cmwiOi4uLn0"
-                        value={inviteRaw}
-                        onChange={(e) => setInviteRaw(e.target.value)}
-                      />
-                    </div>
-                    <div className="flex justify-end gap-2">
-                      <Button variant="ghost" onClick={() => nav(-1)}>Отмена</Button>
-                      <Button
-                        variant="gradient"
-                        onClick={() => void loadInviteInfo()}
-                        disabled={busy || !inviteRaw.trim()}
-                      >
-                        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                        Проверить ссылку
-                      </Button>
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <div className="rounded-lg border border-emerald-400/30 bg-emerald-400/5 p-3 text-sm">
-                      <div className="font-medium">
-                        Тебя приглашают в проект{' '}
-                        <span className="text-emerald-300">
-                          {inviteInfo.projectName ?? '(без имени)'}
-                        </span>
-                      </div>
-                      <div className="mt-1 text-xs text-muted-foreground">
-                        Роль: <strong className="text-foreground">{inviteInfo.role}</strong>
-                        {' · '}действительно ещё{' '}
-                        {Math.max(
-                          0,
-                          Math.round((inviteInfo.expiresAt - Date.now()) / 3600_000),
-                        )}{' '}
-                        ч.
-                      </div>
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label htmlFor="invu">Имя пользователя</Label>
-                      <Input
-                        id="invu"
-                        placeholder="myname"
-                        value={inviteUsername}
-                        onChange={(e) => setInviteUsername(e.target.value)}
-                      />
-                      <p className="text-xs text-muted-foreground">
-                        Если у тебя уже есть аккаунт на этом сервере — введи свой
-                        логин и пароль, ты будешь добавлен в проект как существующий
-                        юзер. Иначе — создаётся новый аккаунт.
-                      </p>
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label htmlFor="invp">Пароль</Label>
-                      <Input
-                        id="invp"
-                        type="password"
-                        value={invitePassword}
-                        onChange={(e) => setInvitePassword(e.target.value)}
-                      />
-                    </div>
-                    <div className="flex justify-end gap-2">
-                      <Button
-                        variant="ghost"
-                        onClick={() => {
-                          setInviteInfo(null);
-                          setInviteUsername('');
-                          setInvitePassword('');
-                        }}
-                      >
-                        Назад
-                      </Button>
-                      <Button
-                        variant="gradient"
-                        onClick={() => void submitInvite()}
-                        disabled={busy}
-                      >
-                        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                        Войти в проект
-                      </Button>
-                    </div>
-                  </>
-                )}
-              </CardContent>
-            </Card>
-          )}
         </>
       )}
 

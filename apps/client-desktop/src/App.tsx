@@ -6,6 +6,7 @@ import { LoginPage } from './pages/Login';
 import { DashboardPage } from './pages/Dashboard';
 import { CreateServerWizard } from './pages/CreateServerWizard';
 import { ConnectServerWizard } from './pages/ConnectServerWizard';
+import { JoinByInviteWizard } from './pages/JoinByInviteWizard';
 import { ProjectPage } from './pages/Project';
 import { ServerPage } from './pages/Server';
 import { SettingsPage } from './pages/Settings';
@@ -128,6 +129,7 @@ export default function App(): JSX.Element {
           <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/wizard/create" element={<CreateServerWizard />} />
           <Route path="/wizard/connect" element={<ConnectServerWizard />} />
+          <Route path="/wizard/invite" element={<JoinByInviteWizard />} />
           <Route path="/server/:serverId" element={<ServerPage />} />
           <Route path="/server/:serverId/project/:projectId" element={<ProjectPage />} />
           <Route path="/settings" element={<SettingsPage />} />
