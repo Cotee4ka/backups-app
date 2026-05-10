@@ -210,7 +210,16 @@ export const ProjectPage = () => {
 
   async function flushNow() {
     await window.backupsApp.sync.flushNow({ serverId, projectId });
-    addToast({ type: 'info', text: 'Принудительный коммит и push' });
+    addToast({ type: 'success', text: 'Изменения отправлены на сервер' });
+  }
+
+  async function applyRemote() {
+    try {
+      await window.backupsApp.sync.applyRemote({ serverId, projectId });
+      addToast({ type: 'success', text: 'Локальные файлы обновлены' });
+    } catch (e) {
+      addToast({ type: 'error', text: (e as Error).message });
+    }
   }
 
   async function doRestore(sha: string, strategy: 'revert' | 'reset') {
@@ -356,14 +365,39 @@ export const ProjectPage = () => {
           {isExternal ? null : synced?.enabled ? (
             <>
               <SyncBadge status={syncStatus?.state ?? 'idle'} />
-              <Button variant="outline" onClick={flushNow}>
-                <Save className="h-4 w-4" /> Сохранить сейчас
+              <Button
+                onClick={flushNow}
+                className="bg-emerald-500 text-white hover:bg-emerald-600 disabled:opacity-50"
+                disabled={
+                  syncStatus?.state === 'pushing' || syncStatus?.state === 'pulling'
+                }
+                title={
+                  (syncStatus?.dirtyFiles ?? 0) > 0
+                    ? `Залить на сервер: ${syncStatus?.dirtyFiles} изменений`
+                    : 'Принудительный коммит — обычно не нужен, изменений нет'
+                }
+              >
+                <Save className="h-4 w-4" />
+                Сохранить сейчас
+                {(syncStatus?.dirtyFiles ?? 0) > 0 ? (
+                  <span className="ml-1 rounded bg-white/20 px-1.5 text-xs font-semibold">
+                    {syncStatus?.dirtyFiles}
+                  </span>
+                ) : null}
               </Button>
-              <Button variant="outline" onClick={() => window.backupsApp.settings.showItemInFolder(synced.localPath)}>
+              <Button
+                variant="outline"
+                onClick={() => void window.backupsApp.settings.openPath(synced.localPath)}
+              >
                 <Folder className="h-4 w-4" /> Открыть папку
               </Button>
-              <Button variant="destructive" onClick={stopSync}>
-                <Pause className="h-4 w-4" /> Остановить
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={stopSync}
+                title="Остановить синхронизацию (локальные файлы не удаляются)"
+              >
+                <Pause className="h-4 w-4" />
               </Button>
             </>
           ) : (
@@ -401,6 +435,50 @@ export const ProjectPage = () => {
                 </>
               )}
             </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {synced?.enabled && syncStatus?.pendingRemote && (
+        <Card className="border-sky-500/40 bg-sky-500/5">
+          <CardContent className="flex flex-wrap items-center justify-between gap-3 py-4">
+            <div className="flex flex-col gap-1 text-sm">
+              <div className="flex items-center gap-2">
+                <CloudDownload className="h-4 w-4 text-sky-300" />
+                <span className="font-medium text-sky-100">
+                  {syncStatus.pendingRemote.kind === 'restore'
+                    ? 'Откат истории на сервере'
+                    : (
+                        <>
+                          Обновил{' '}
+                          <strong>
+                            {syncStatus.pendingRemote.authorName || '(неизвестно)'}
+                          </strong>{' '}
+                          {formatRelativeTime(syncStatus.pendingRemote.timestamp)}
+                          {syncStatus.pendingRemote.filesChanged
+                            ? ` · ${syncStatus.pendingRemote.filesChanged} файл(ов)`
+                            : ''}
+                        </>
+                      )}
+                </span>
+              </div>
+              <div className="text-xs text-muted-foreground">
+                Локальные файлы пока не тронуты. Подтянуть изменения?
+                {syncStatus.dirtyFiles
+                  ? ` У тебя есть ${syncStatus.dirtyFiles} несохранённых правок — git попробует смержить через rebase.`
+                  : ''}
+              </div>
+            </div>
+            <Button
+              variant="outline"
+              onClick={() => void applyRemote()}
+              disabled={
+                syncStatus.state === 'pulling' || syncStatus.state === 'pushing'
+              }
+            >
+              <CloudDownload className="h-4 w-4" />
+              Применить локально
+            </Button>
           </CardContent>
         </Card>
       )}

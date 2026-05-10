@@ -243,6 +243,8 @@ const api = {
       ipcRenderer.invoke('sync:stop', params),
     flushNow: (params: { serverId: string; projectId: string }) =>
       ipcRenderer.invoke('sync:flushNow', params),
+    applyRemote: (params: { serverId: string; projectId: string }) =>
+      ipcRenderer.invoke('sync:applyRemote', params) as Promise<{ ok: boolean }>,
     listSynced: (serverId: string) => ipcRenderer.invoke('sync:listSynced', serverId),
     dirtyFiles: (serverId: string, projectId: string) =>
       ipcRenderer.invoke('sync:dirtyFiles', { serverId, projectId }) as Promise<{
@@ -262,6 +264,14 @@ const api = {
           startedAt: number;
           etaSec?: number;
         };
+        pendingRemote?: {
+          sha: string;
+          authorId: string;
+          authorName: string;
+          timestamp: number;
+          filesChanged: number;
+          kind: 'push' | 'restore';
+        } | null;
       }) => void,
     ) => {
       const sub = (_e: unknown, s: Parameters<typeof cb>[0]) => cb(s);
@@ -372,6 +382,8 @@ const api = {
     setAutoLaunch: (enabled: boolean) => ipcRenderer.invoke('settings:autoLaunch', enabled),
     openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
     showItemInFolder: (p: string) => ipcRenderer.invoke('shell:showItemInFolder', p),
+    openPath: (p: string) =>
+      ipcRenderer.invoke('shell:openPath', p) as Promise<{ ok: boolean; error: string | null }>,
   },
   // ---------- App info ----------
   app: {

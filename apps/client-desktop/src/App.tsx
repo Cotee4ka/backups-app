@@ -53,6 +53,7 @@ export default function App(): JSX.Element {
               startedAt: number;
               etaSec?: number;
             },
+        pendingRemote: s.pendingRemote ?? null,
       });
     });
     return offSync;

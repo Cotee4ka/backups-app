@@ -109,15 +109,31 @@ function handleMessage(serverId: string, msg: ServerMessage): void {
       console.warn('[ws] auth error:', msg.reason);
       break;
     case 'repo:updated':
-      void getSyncEngine()
-        .then((sync) => sync.applyRemoteUpdate(serverId, msg.projectId))
-        .catch((e) => console.error('apply remote update error:', e));
+      // Mode 1 — РУЧНОЙ синк: не подтягиваем автоматом, только показываем
+      // пользователю «обновил X, файлов N — применить?».
+      void getSyncEngine().then((sync) =>
+        sync.notifyRemoteUpdate(serverId, msg.projectId, {
+          sha: msg.sha,
+          authorId: msg.authorId,
+          authorName: msg.authorName,
+          timestamp: msg.timestamp,
+          filesChanged: msg.filesChanged,
+          kind: 'push',
+        }),
+      );
       onEventCb?.('repo:updated', { serverId, ...msg });
       break;
     case 'project:restored':
-      void getSyncEngine()
-        .then((sync) => sync.applyRemoteUpdate(serverId, msg.projectId))
-        .catch((e) => console.error('apply restore error:', e));
+      void getSyncEngine().then((sync) =>
+        sync.notifyRemoteUpdate(serverId, msg.projectId, {
+          sha: msg.sha,
+          authorId: msg.byUserId,
+          authorName: '',
+          timestamp: Date.now(),
+          filesChanged: 0,
+          kind: 'restore',
+        }),
+      );
       onEventCb?.('project:restored', { serverId, ...msg });
       break;
     case 'project:deleted':

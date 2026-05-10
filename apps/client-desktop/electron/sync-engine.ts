@@ -7,8 +7,6 @@ import { simpleGit, type SimpleGit } from 'simple-git';
 import {
   HARD_IGNORE_PATTERNS,
   PROJECT_CONFIG_FILENAME,
-  SYNC_DEBOUNCE_MS,
-  SYNC_PERIODIC_FLUSH_MS,
   buildGitignore,
 } from '@backups-app/shared';
 import { getServerStore } from './store';
@@ -51,6 +49,22 @@ export interface UploadProgress {
   etaSec?: number;
 }
 
+/**
+ * Сводка «пришло что-то с сервера, надо подтянуть локально». Заполняется
+ * при WS-событии `repo:updated` от ДРУГОГО юзера. UI показывает баннер
+ * «Обновил X, файлов: N — Применить локально» — пока юзер не нажмёт,
+ * локальные файлы не трогаем.
+ */
+export interface PendingRemote {
+  sha: string;
+  authorId: string;
+  authorName: string;
+  timestamp: number;
+  filesChanged: number;
+  /** push — обычное обновление; restore — owner откатил историю. */
+  kind: 'push' | 'restore';
+}
+
 export interface SyncStatusUpdate {
   serverId: string;
   projectId: string;
@@ -58,6 +72,7 @@ export interface SyncStatusUpdate {
   detail?: string;
   dirtyFiles?: number;
   upload?: UploadProgress;
+  pendingRemote?: PendingRemote | null;
 }
 
 interface ProjectSync {
@@ -69,13 +84,12 @@ interface ProjectSync {
   dirty: Set<string>;
   ignored: Set<string>;
   state: SyncState;
-  debounceTimer: NodeJS.Timeout | null;
-  periodicTimer: NodeJS.Timeout | null;
   isPushing: boolean;
   pendingPush: boolean;
   customIgnore: string[];
   applyingPull: boolean;
   upload: UploadProgress | null;
+  pendingRemote: PendingRemote | null;
 }
 
 const active = new Map<string, ProjectSync>();
@@ -96,6 +110,7 @@ function emit(s: ProjectSync, override?: Partial<SyncStatusUpdate>): void {
     state: s.state,
     dirtyFiles: s.dirty.size,
     upload: s.upload ?? undefined,
+    pendingRemote: s.pendingRemote,
     ...override,
   });
 }
@@ -266,13 +281,12 @@ export async function startSync(params: {
     dirty: new Set(),
     ignored: new Set(),
     state: 'idle',
-    debounceTimer: null,
-    periodicTimer: null,
     isPushing: false,
     pendingPush: false,
     customIgnore: [],
     applyingPull: false,
     upload: null,
+    pendingRemote: null,
   };
 
   if (params.mode === 'upload') {
@@ -309,12 +323,15 @@ export async function startSync(params: {
     followSymlinks: false,
   });
 
+  // Mode 1 — РУЧНОЙ режим: chokidar лишь складывает изменения в dirty,
+  // ничего не пушит автоматом. Юзер сам жмёт «Сохранить сейчас» когда
+  // готов отправить пачку. Никаких debounce-таймеров и периодических
+  // flush'ей — раньше они путали: оно само улетало в неподходящий момент.
   const onChange = (file: string) => {
     if (ps.applyingPull) return;
     ps.dirty.add(path.relative(params.localPath, file).replace(/\\/g, '/'));
     ps.state = 'dirty';
     emit(ps);
-    scheduleFlush(ps);
   };
 
   watcher.on('add', onChange);
@@ -324,10 +341,6 @@ export async function startSync(params: {
   watcher.on('unlinkDir', onChange);
 
   ps.watcher = watcher;
-
-  ps.periodicTimer = setInterval(() => {
-    if (ps.dirty.size > 0) flush(ps).catch((e) => console.error('periodic flush error:', e));
-  }, getServerStore().getSettings().syncPeriodicMs ?? SYNC_PERIODIC_FLUSH_MS);
 
   // Сохраняем в store
   getServerStore().setSyncedFolder(params.serverId, {
@@ -449,19 +462,9 @@ export async function stopSync(serverId: string, projectId: string): Promise<voi
   const k = key(serverId, projectId);
   const ps = active.get(k);
   if (!ps) return;
-  if (ps.debounceTimer) clearTimeout(ps.debounceTimer);
-  if (ps.periodicTimer) clearInterval(ps.periodicTimer);
   await ps.watcher?.close();
   active.delete(k);
   getServerStore().removeSyncedFolder(serverId, projectId);
-}
-
-function scheduleFlush(ps: ProjectSync): void {
-  const settings = getServerStore().getSettings();
-  if (ps.debounceTimer) clearTimeout(ps.debounceTimer);
-  ps.debounceTimer = setTimeout(() => {
-    flush(ps).catch((e) => console.error('debounce flush error:', e));
-  }, settings.syncDebounceMs ?? SYNC_DEBOUNCE_MS);
 }
 
 export async function flushNow(serverId: string, projectId: string): Promise<void> {
@@ -578,6 +581,45 @@ async function flush(ps: ProjectSync): Promise<void> {
   }
 }
 
+/**
+ * Запоминаем что на сервере появилось обновление от другого юзера. UI
+ * покажет баннер «Vasya обновил, файлов: N — Применить локально». Сами
+ * локальные файлы НЕ трогаем — пользователь решает когда подтянуть.
+ *
+ * Если у нас прямо сейчас идёт push — игнорим (свежий sha скорее всего
+ * наш собственный, придёт обратным WS-эхом). Также игнорим если
+ * authorId совпадает с username хранящегося сервера (это мы сами).
+ */
+export function notifyRemoteUpdate(
+  serverId: string,
+  projectId: string,
+  info: {
+    sha: string;
+    authorId: string;
+    authorName: string;
+    timestamp: number;
+    filesChanged: number;
+    kind: 'push' | 'restore';
+  },
+): void {
+  const k = key(serverId, projectId);
+  const ps = active.get(k);
+  if (!ps) return;
+  // Если это эхо нашего собственного пуша — не дёргаем UI.
+  const me = getServerStore().getServer(serverId);
+  if (me && info.authorName === me.username) {
+    return;
+  }
+  ps.pendingRemote = info;
+  emit(ps);
+}
+
+/**
+ * Подтянуть с сервера то, о чём ранее уведомил `notifyRemoteUpdate`.
+ * Вызывается из IPC по кнопке «Применить локально». Если конфликт с
+ * локальными правками — пишем error, локальные dirty НЕ ТЕРЯЮТСЯ
+ * (push-rebase разрулит когда юзер всё-таки сохранит).
+ */
 export async function applyRemoteUpdate(serverId: string, projectId: string): Promise<void> {
   const k = key(serverId, projectId);
   const ps = active.get(k);
@@ -606,7 +648,8 @@ export async function applyRemoteUpdate(serverId: string, projectId: string): Pr
         return;
       }
     }
-    ps.state = 'idle';
+    ps.pendingRemote = null;
+    ps.state = ps.dirty.size > 0 ? 'dirty' : 'idle';
     emit(ps);
   } finally {
     ps.applyingPull = false;

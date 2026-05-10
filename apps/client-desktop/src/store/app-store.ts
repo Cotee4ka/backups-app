@@ -54,6 +54,14 @@ interface SyncStatus {
   detail?: string;
   dirtyFiles?: number;
   upload?: UploadProgressInfo;
+  pendingRemote?: {
+    sha: string;
+    authorId: string;
+    authorName: string;
+    timestamp: number;
+    filesChanged: number;
+    kind: 'push' | 'restore';
+  } | null;
 }
 
 interface PresenceUser {

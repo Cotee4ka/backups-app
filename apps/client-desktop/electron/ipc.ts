@@ -1029,6 +1029,14 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     await sync.flushNow(serverId, projectId);
     return { ok: true };
   });
+  ipcMain.handle(
+    'sync:applyRemote',
+    async (_e, { serverId, projectId }: { serverId: string; projectId: string }) => {
+      const sync = await ensureSyncEngine();
+      await sync.applyRemoteUpdate(serverId, projectId);
+      return { ok: true };
+    },
+  );
   ipcMain.handle('sync:listSynced', async (_e, serverId: string) => {
     const sync = await ensureSyncEngine();
     const s = getServerStore().getServer(serverId);
@@ -1068,6 +1076,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   });
   ipcMain.handle('shell:openExternal', async (_e, url: string) => shell.openExternal(url));
   ipcMain.handle('shell:showItemInFolder', async (_e, p: string) => shell.showItemInFolder(p));
+  ipcMain.handle('shell:openPath', async (_e, p: string) => {
+    const err = await shell.openPath(p);
+    return { ok: err === '', error: err || null };
+  });
 
   // ---------- App info ----------
   ipcMain.handle('app:version', async () => app.getVersion());
