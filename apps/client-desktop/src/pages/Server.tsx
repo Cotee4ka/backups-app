@@ -10,7 +10,6 @@ import { Badge } from '@/components/ui/badge';
 import { useAppStore } from '@/store/app-store';
 import { AlertCircle, Cloud, Plus, Server, Trash2, FolderGit2, ShieldCheck, Copy, ChevronRight, HardDrive, ChevronUp, Folder, FileText, Loader2, Pencil, Check, X } from 'lucide-react';
 import { copyToClipboard, formatRelativeTime } from '@/lib/utils';
-import { MIN_SERVER_VERSION, isOlderThan, buildUpdateCommand } from '@/lib/server-version';
 import {
   ServerOutdatedModal,
   useServerVersionGate,
@@ -54,12 +53,6 @@ export const ServerPage = () => {
   const [newName, setNewName] = React.useState('');
   const [newDesc, setNewDesc] = React.useState('');
 
-  const [serverVersion, setServerVersion] = React.useState<{
-    version: string;
-    features?: string[];
-    error?: string;
-  } | null>(null);
-
   const [attachOpen, setAttachOpen] = React.useState(false);
   const [attachName, setAttachName] = React.useState('');
   const [attachPath, setAttachPath] = React.useState('/host');
@@ -71,11 +64,8 @@ export const ServerPage = () => {
   React.useEffect(() => {
     if (!server) return;
     void load();
-    // Параллельно проверяем версию серверного ПО, чтобы показать плашку
-    // обновления, если на VPS устарела сборка.
-    void window.backupsApp.servers.checkVersion(serverId).then((v) => {
-      setServerVersion(v as { version: string; features?: string[]; error?: string });
-    });
+    // Версия сервера проверяется через useServerVersionGate ниже —
+    // старый дублирующий чекер удалён в 0.7.x.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [serverId]);
 
@@ -117,6 +107,14 @@ export const ServerPage = () => {
       };
       setBrowseEntries(r.entries);
       setAttachPath(r.path);
+      // Автозаполнение имени проекта из имени конечной папки — если юзер
+      // ещё не вводил своё. Это снимает неочевидную проблему «кнопка не
+      // активна потому что пустое название», когда пользователь уже
+      // открыл нужную папку и думает что готов жать «Подключить».
+      if (!attachName.trim()) {
+        const last = r.path.replace(/\/+$/, '').split('/').filter(Boolean).pop();
+        if (last && last !== 'host') setAttachName(last);
+      }
     } catch (e) {
       setBrowseError((e as Error).message);
       setBrowseEntries([]);
@@ -234,17 +232,6 @@ export const ServerPage = () => {
           </Button>
         </div>
       </header>
-
-      {serverVersion && isOlderThan(serverVersion.version, MIN_SERVER_VERSION) && (
-        <ServerOutdatedBanner
-          actual={serverVersion.version}
-          required={MIN_SERVER_VERSION}
-          onCopy={() => {
-            void copyToClipboard(buildUpdateCommand());
-            addToast({ type: 'success', text: 'Команда обновления скопирована в буфер' });
-          }}
-        />
-      )}
 
       <div className="grid gap-4 md:grid-cols-3">
         <InfoTile
@@ -401,7 +388,17 @@ export const ServerPage = () => {
             <div className="flex items-center gap-2">
               <Input
                 value={attachPath}
-                onChange={(e) => setAttachPath(e.target.value)}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  setAttachPath(next);
+                  // Автозаполнение названия проекта из имени конечной
+                  // папки — если юзер ещё не ввёл своё. Так кнопка сразу
+                  // становится активной без лишних кликов.
+                  if (!attachName.trim()) {
+                    const last = next.replace(/\/+$/, '').split('/').filter(Boolean).pop();
+                    if (last && last !== 'host') setAttachName(last);
+                  }
+                }}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
                     e.preventDefault();
@@ -509,43 +506,6 @@ export const ServerPage = () => {
     </div>
   );
 };
-
-const ServerOutdatedBanner = ({
-  actual,
-  required,
-  onCopy,
-}: {
-  actual: string;
-  required: string;
-  onCopy: () => void;
-}) => (
-  <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-5">
-    <div className="mb-2 flex flex-wrap items-center gap-2">
-      <AlertCircle className="h-4 w-4 text-amber-300" />
-      <div className="text-sm font-medium text-amber-100">
-        На VPS установлена устаревшая серверная часть
-      </div>
-      <Badge variant="warning">v{actual}</Badge>
-      <span className="text-xs text-muted-foreground">→ нужна v{required}+</span>
-    </div>
-    <p className="text-sm text-muted-foreground">
-      В новой версии есть автодетекция «Хранилища данных» (БД, бэкапы, архивы) и
-      серверный отчёт по версии. Запустите эту команду на VPS под{' '}
-      <code className="font-mono">root/sudo</code>:
-    </p>
-    <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-border bg-background/40 p-3">
-      <code className="min-w-0 flex-1 break-all font-mono text-xs">
-        {buildUpdateCommand()}
-      </code>
-      <Button variant="outline" size="sm" onClick={onCopy}>
-        <Copy className="h-3.5 w-3.5" /> Скопировать
-      </Button>
-    </div>
-    <p className="mt-2 text-xs text-muted-foreground">
-      Перезапуск займёт ~10 секунд, активные сессии сохранятся.
-    </p>
-  </div>
-);
 
 const InfoTile = ({
   label,
