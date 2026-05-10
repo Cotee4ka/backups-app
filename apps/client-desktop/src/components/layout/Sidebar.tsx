@@ -83,18 +83,12 @@ export const Sidebar = () => {
                   </NavItem>
                 ))}
               </div>
-              <div className="mt-2 flex flex-col gap-1.5 px-2">
+              <div className="mt-2 px-2">
                 <Link
                   to="/wizard/create"
                   className="accent-btn inline-flex h-8 w-full items-center justify-center gap-2 rounded-md px-3 text-xs font-medium"
                 >
                   <Plus className="h-4 w-4" /> Создать сервер
-                </Link>
-                <Link
-                  to="/wizard/invite"
-                  className="inline-flex h-8 w-full items-center justify-center gap-2 rounded-md border border-emerald-400/40 bg-emerald-400/5 px-3 text-xs font-medium text-emerald-200 hover:bg-emerald-400/10"
-                >
-                  <Plus className="h-4 w-4" /> По приглашению
                 </Link>
               </div>
 
